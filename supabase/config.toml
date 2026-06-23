@@ -1,0 +1,6 @@
+# Supabase CLI config for brand-outreach-studio.
+# `project_id` pins this repo to ONE project, so `supabase link` / `db push` /
+# `gen types` can never target another project by accident. Combined with the
+# per-repo SUPABASE_ACCESS_TOKEN in .env (injected by scripts/sb.mjs), this gives
+# full per-project isolation without re-running `supabase login` when switching.
+project_id = "zzgypushqcpchfxrjexc"

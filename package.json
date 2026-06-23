@@ -1,0 +1,38 @@
+{
+  "name": "brand-outreach-studio",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "next dev -p 5174",
+    "build": "next build",
+    "start": "next start -p 5174",
+    "typecheck": "tsc --noEmit",
+    "sb": "node scripts/sb.mjs",
+    "db:apply": "node scripts/db-apply.mjs",
+    "db:seed": "node scripts/db-seed.mjs",
+    "db:link": "node scripts/sb.mjs link --project-ref zzgypushqcpchfxrjexc",
+    "db:push": "node scripts/sb.mjs db push --linked",
+    "db:list": "node scripts/sb.mjs migration list --linked",
+    "gen:types": "node scripts/sb.mjs gen types typescript --project-id zzgypushqcpchfxrjexc"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.45.4",
+    "lucide-react": "^0.460.0",
+    "next": "^16.2.9",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
+    "zustand": "^5.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "26.0.0",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "autoprefixer": "^10.4.20",
+    "pg": "^8.22.0",
+    "postcss": "^8.4.47",
+    "supabase": "^2.107.0",
+    "tailwindcss": "^3.4.14",
+    "typescript": "^5.6.3"
+  }
+}

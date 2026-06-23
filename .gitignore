@@ -1,0 +1,32 @@
+node_modules
+*.local
+
+# Next.js build output + generated types
+.next/
+next-env.d.ts
+tsconfig.tsbuildinfo
+
+# Secrets
+.env
+.env.local
+
+# Supabase MCP config holds a Personal Access Token — never commit it.
+# Commit .mcp.json.example (redacted) instead.
+.mcp.json
+
+# Editor / OS
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+Thumbs.db
+
+# Supabase local
+supabase/.branches
+supabase/.temp
+
+# Pre-Next-migration restore point
+.backup-premigration.tar.gz
+
+# Playwright MCP snapshots
+.playwright-mcp/

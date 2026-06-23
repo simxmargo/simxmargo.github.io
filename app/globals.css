@@ -1,0 +1,42 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=Playfair+Display:ital,wght@0,500;0,600;0,700;0,800;1,500&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light;
+}
+
+/* Next renders into <body>; there is no #root element (that was Vite). */
+html,
+body {
+  height: 100%;
+}
+
+body {
+  @apply bg-stone-100 text-stone-800 antialiased;
+  font-family: 'Inter', system-ui, sans-serif;
+}
+
+/* Thin, tasteful scrollbars to match the editorial feel. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #d6d3d1 transparent;
+}
+
+/* Scroll-reveal must never hide content from print/PDF (the Download feature uses
+   window.print()) or from users who never scroll an element into view. Force the
+   final, visible state whenever motion is inappropriate. */
+@media print {
+  .reveal {
+    opacity: 1 !important;
+    transform: none !important;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .reveal {
+    opacity: 1 !important;
+    transform: none !important;
+  }
+}
