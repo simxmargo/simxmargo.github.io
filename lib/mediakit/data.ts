@@ -22,16 +22,23 @@ import type {
 function mapProfile(r: any): PublicProfile {
   return {
     displayName: r.display_name ?? '',
+    handle: r.handle ?? '',
     tagline: r.tagline ?? '',
     bioMd: r.bio_md ?? '',
     avatarUrl: r.avatar_url ?? '',
     heroImageUrl: r.hero_image_url ?? '',
+    faviconUrl: r.favicon_url ?? '',
     location: r.location ?? '',
     niche: r.niche ?? '',
+    audience: r.audience ?? '',
+    replyToEmail: r.reply_to_email ?? '',
+    mailingAddress: r.mailing_address ?? '',
+    mediaKitUrl: r.media_kit_url ?? '',
     totalFollowers: r.total_followers ?? null,
     rateCard: (r.rate_card ?? []) as RateCardItem[],
     pressLogos: r.press_logos ?? [],
     seo: r.seo ?? {},
+    theme: r.theme ?? {},
     isPublished: Boolean(r.is_published),
   }
 }
@@ -61,9 +68,38 @@ function mapBrand(r: any): PortfolioBrand {
     media: (r.media ?? []) as BrandMedia[],
     category: r.category ?? '',
     featured: Boolean(r.featured),
+    rowIndex: r.row_index === 1 || r.row_index === 2 ? r.row_index : undefined,
   }
 }
 /* eslint-enable @typescript-eslint/no-explicit-any */
+
+// Lightweight reader for just the favicon URL (the whole-site browser-tab icon),
+// used by the root layout's generateMetadata. Reads only favicon_url — not the
+// full media kit — so /admin requests don't pull brands + socials just for an icon.
+// React-cached per request; returns '' on any failure → layout falls back to /icon.svg.
+export const getFaviconUrl = cache(async (): Promise<string> => {
+  if (!isSupabaseConfigured) return ''
+  try {
+    const { data } = await supabasePublic.from('public_profile').select('favicon_url').eq('id', 1).maybeSingle()
+    return (data?.favicon_url as string | null) ?? ''
+  } catch {
+    return ''
+  }
+})
+
+// The theme accent colour (public_profile.theme.accent), used to tint the dynamic
+// favicon so the browser-tab mark follows the selected theme. '' when unset/unavailable
+// → the favicon falls back to the design default. React-cached per request.
+export const getThemeAccent = cache(async (): Promise<string> => {
+  if (!isSupabaseConfigured) return ''
+  try {
+    const { data } = await supabasePublic.from('public_profile').select('theme').eq('id', 1).maybeSingle()
+    const theme = (data?.theme ?? {}) as { accent?: string }
+    return typeof theme.accent === 'string' ? theme.accent : ''
+  } catch {
+    return ''
+  }
+})
 
 // Wrapped in React cache() so the page render AND generateMetadata share a single
 // read per request (Supabase queries aren't deduped by Next's fetch cache).
@@ -77,7 +113,6 @@ export const getMediaKit = cache(async (): Promise<MediaKitData> => {
         .from('portfolio_brands')
         .select('*')
         .eq('is_visible', true)
-        .order('featured', { ascending: false })
         .order('sort_order', { ascending: true }),
     ])
     if (profileRes.error) throw profileRes.error

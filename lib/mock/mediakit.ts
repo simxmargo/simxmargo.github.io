@@ -8,13 +8,19 @@ import type { MediaKitData, PortfolioBrand, PublicProfile, SocialStat } from '@/
 
 export const mockProfile: PublicProfile = {
   displayName: 'sim x margo',
+  handle: '@simxmargo',
   tagline: 'Fashion, beauty & everyday inspiration — for brands that want to feel real.',
   bioMd:
     'Simone Marie Golez is a Filipino lifestyle content creator specializing in fashion, beauty, editing, and day-to-day inspiration. She creates engaging digital content that blends aesthetics with authenticity, letting brands connect meaningfully with her audience.',
   avatarUrl: '',
   heroImageUrl: '',
+  faviconUrl: '',
   location: 'Philippines',
   niche: 'Photography & Videography · Fashion & Styling',
+  audience: '',
+  replyToEmail: '',
+  mailingAddress: '',
+  mediaKitUrl: '',
   totalFollowers: null, // computed from socials → 4.394M
   rateCard: [
     { deliverable: 'TikTok video (1 × 30–60s)', price: 'from $1,200', note: 'concept, shoot, edit' },

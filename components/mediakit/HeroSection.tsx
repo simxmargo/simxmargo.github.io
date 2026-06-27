@@ -1,9 +1,8 @@
 'use client'
 
-import { MapPin } from 'lucide-react'
 import type { PublicProfile, SocialStat } from '@/lib/mediakit-types'
 import { formatCount, totalReach } from '@/lib/mediakit-types'
-import { Reveal } from '@/components/mediakit/Reveal'
+import { Wordmark } from '@/components/mediakit/Wordmark'
 import { useCountUp } from '@/components/mediakit/useCountUp'
 
 interface HeroSectionProps {
@@ -11,101 +10,68 @@ interface HeroSectionProps {
   socials: SocialStat[]
 }
 
-function initials(name: string): string {
-  return name
-    .trim()
-    .split(/\s+/)
-    .slice(0, 2)
-    .map((w) => w[0]?.toUpperCase() ?? '')
-    .join('')
-}
-
-interface ReachCounterProps {
-  target: number
-}
-
-function ReachCounter({ target }: ReachCounterProps) {
-  const { value, ref } = useCountUp(target)
-  return (
-    <div className="flex flex-col items-center gap-2">
-      <span className="text-xs font-medium uppercase tracking-[0.2em] text-ivory/60">
-        Total reach
-      </span>
-      <span ref={ref} className="font-editorial text-4xl tracking-tight text-ivory md:text-5xl">
-        {formatCount(value)}
-      </span>
-    </div>
-  )
-}
-
 export function HeroSection({ profile, socials }: HeroSectionProps) {
-  const reach = totalReach(profile, socials)
+  const { value, ref } = useCountUp(totalReach(profile, socials))
+
+  // The avatar/portrait IS the hero image (a separate hero field was redundant).
+  // Keep heroImageUrl as a fallback only so any legacy value still renders.
+  const photo = profile.avatarUrl || profile.heroImageUrl
+
+  // Split ONLY on the bullet so multi-word labels survive intact — e.g. "Manila, PH"
+  // keeps its comma and "Fashion & Styling" keeps its ampersand (matches the design's
+  // "Manila, PH · Fashion · Beauty · Lifestyle" spacing).
+  const nicheTokens = profile.niche
+    .split('·')
+    .map((t) => t.trim())
+    .filter(Boolean)
+    .slice(0, 3)
+  const tokens = [profile.location, ...nicheTokens].filter(Boolean)
 
   return (
-    <section className="mx-auto flex min-h-[88vh] max-w-5xl flex-col justify-center bg-ink-950 px-6 text-center">
-      <Reveal delay={0}>
-        {profile.avatarUrl ? (
-          <img
-            src={profile.avatarUrl}
-            alt={`Portrait of ${profile.displayName}`}
-            className="mx-auto h-24 w-24 rounded-full object-cover ring-1 ring-white/10"
-          />
-        ) : (
-          <div
-            aria-hidden="true"
-            className="mx-auto flex h-24 w-24 items-center justify-center rounded-full bg-ink-800 font-editorial text-2xl text-blush-300"
-          >
-            {initials(profile.displayName)}
-          </div>
-        )}
-      </Reveal>
+    <section id="top" className="hero">
+      {photo ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img className="hero-photo" src={photo} alt={profile.displayName} />
+      ) : null}
+      <div className="hero-scrim" />
+      <div className="hero-vig" />
 
-      <Reveal delay={120}>
-        <h1 className="mt-8 font-editorial text-5xl tracking-tight text-ivory md:text-7xl">
-          {profile.displayName}
-        </h1>
-      </Reveal>
-
-      <Reveal delay={200}>
-        <div className="mt-5 flex flex-wrap items-center justify-center gap-x-6 gap-y-2 text-sm text-ivory/60">
-          {profile.location && (
-            <span className="inline-flex items-center gap-1.5">
-              <MapPin className="h-4 w-4" aria-hidden="true" />
-              {profile.location}
+      <div className="hero-content wrap">
+        <div className="hero-meta label reveal">
+          {tokens.map((token, i) => (
+            <span key={i}>
+              {i > 0 ? <span className="dot">·</span> : null}
+              {token}
             </span>
-          )}
-          {profile.niche && <span>{profile.niche}</span>}
+          ))}
         </div>
-      </Reveal>
 
-      <Reveal delay={280}>
-        <p className="mx-auto mt-6 max-w-2xl text-lg text-ivory/70 md:text-xl">
-          {profile.tagline}
-        </p>
-      </Reveal>
+        <h1 className="display name reveal">
+          <Wordmark name={profile.displayName} />
+        </h1>
 
-      <Reveal delay={360}>
-        <div className="mt-12">
-          <ReachCounter target={reach} />
+        <div className="hero-row">
+          <div className="reach-big reveal">
+            <span className="reach-num display">
+              <span ref={ref}>{formatCount(value)}</span>
+            </span>
+            <span className="label">total reach</span>
+          </div>
+          <div className="cta-row reveal">
+            <a href="#contact" className="btn btn-primary magnetic">
+              Work with me
+            </a>
+            <a href="#partners" className="btn btn-ghost magnetic">
+              See partners
+            </a>
+          </div>
         </div>
-      </Reveal>
+      </div>
 
-      <Reveal delay={440}>
-        <div className="mt-12 flex flex-col items-center justify-center gap-3 sm:flex-row">
-          <a
-            href="#work-with-me"
-            className="rounded-full bg-ivory px-6 py-3 text-sm font-medium text-ink-950 transition-colors hover:bg-blush-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blush-400"
-          >
-            Work with me
-          </a>
-          <a
-            href="#portfolio"
-            className="rounded-full border border-white/20 px-6 py-3 text-sm font-medium text-ivory transition-colors hover:border-white/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blush-400"
-          >
-            See the work
-          </a>
-        </div>
-      </Reveal>
+      <div className="scroll-cue reveal">
+        <span className="label">Scroll</span>
+        <span className="ln" />
+      </div>
     </section>
   )
 }

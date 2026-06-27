@@ -1,28 +1,264 @@
 'use client'
 
-import { useState } from 'react'
-import type { RateCardItem } from '@/lib/mediakit-types'
-import { RateCardSection } from './RateCardSection'
-import { WorkWithMeForm } from './WorkWithMeForm'
+import { useMemo, useState } from 'react'
+import type { CollabInquiryInput, PublicProfile } from '@/lib/mediakit-types'
 
-// Client coordinator: clicking "Enquire" on a rate-card row preselects that
-// deliverable in the contact form and smooth-scrolls to it. Kept as its own
-// client island so the page can stay a Server Component.
-export function RateAndContact({ rateCard }: { rateCard: RateCardItem[] }) {
-  const [selected, setSelected] = useState<string | undefined>(undefined)
-  const [nonce, setNonce] = useState(0) // changes every click so repeat enquiries re-apply
+const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/
+
+// Single client island owning BOTH the Rates (#rates) and Collaborate (#contact)
+// sections plus the shared "selected deliverable" state: clicking Select on a
+// rate row pre-fills the contact form's Package select and smooth-scrolls to
+// the form. Kept together so the page itself can stay a Server Component.
+export function RateAndContact({ profile }: { profile: PublicProfile }) {
+  const rateCard = profile.rateCard
+  // Contact email comes from the profile (admin → Profile → Reply-to email), with
+  // the design's address as a last-resort fallback so the link is never empty.
+  const contactEmail = profile.replyToEmail?.trim() || 'hello@simxmargo.com'
+  const deliverables = useMemo(
+    () => Array.from(new Set(rateCard.map((r) => r.deliverable).filter(Boolean))),
+    [rateCard],
+  )
+
+  // Shared form state.
+  const [name, setName] = useState('')
+  const [email, setEmail] = useState('')
+  const [company, setCompany] = useState('')
+  const [deliverable, setDeliverable] = useState('') // shared: selectRate() sets this
+  const [message, setMessage] = useState('')
+  const [website, setWebsite] = useState('') // honeypot
+  const [status, setStatus] = useState<'idle' | 'sending' | 'success' | 'error'>('idle')
+
+  function selectRate(d: string) {
+    setDeliverable(d)
+    const reducedMotion =
+      typeof window !== 'undefined' &&
+      window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    const el = document.getElementById('contact')
+    if (el)
+      window.scrollTo({
+        top: el.getBoundingClientRect().top + window.scrollY - 70,
+        behavior: reducedMotion ? 'auto' : 'smooth',
+      })
+  }
+
+  function resetForm() {
+    setName('')
+    setEmail('')
+    setCompany('')
+    setDeliverable('')
+    setMessage('')
+    setWebsite('')
+    setStatus('idle')
+  }
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault()
+
+    // Honeypot tripped — silently pretend success, never post.
+    if (website) {
+      setStatus('success')
+      return
+    }
+
+    // Validation: name + valid email + message required.
+    if (!name.trim() || name.length > 120) return
+    if (!email.trim() || !EMAIL_RE.test(email)) return
+    if (!message.trim() || message.length > 4000) return
+
+    setStatus('sending')
+    const payload: CollabInquiryInput = {
+      name: name.trim(),
+      email: email.trim(),
+      company: company.trim() || undefined,
+      deliverables: deliverable ? [deliverable] : [],
+      message: message.trim(),
+    }
+    try {
+      const res = await fetch(process.env.NEXT_PUBLIC_COLLAB_ENDPOINT || '/api/collab', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(payload),
+      })
+      if (res.ok) setStatus('success')
+      else setStatus('error')
+    } catch {
+      setStatus('error')
+    }
+  }
 
   return (
     <>
-      <RateCardSection
-        rateCard={rateCard}
-        onEnquire={(deliverable) => {
-          setSelected(deliverable)
-          setNonce((n) => n + 1)
-          document.getElementById('work-with-me')?.scrollIntoView({ behavior: 'smooth' })
-        }}
-      />
-      <WorkWithMeForm rateCard={rateCard} preselectedDeliverable={selected} preselectNonce={nonce} />
+      {/* Rates */}
+      <section id="rates" className="rates">
+        <div className="wrap">
+          <div className="sec-head">
+            <div>
+              <div className="label reveal">Rates</div>
+              <h2 className="display h2 reveal">Work, priced simply</h2>
+            </div>
+          </div>
+          <div className="rate-list">
+            {rateCard.map((r, i) => (
+              <div key={i} className="rate-row reveal">
+                <div className="rate-title display">{r.deliverable}</div>
+                <div className="rate-meta">{r.note}</div>
+                <div className="rate-price display">{r.price}</div>
+                <button
+                  type="button"
+                  className="btn btn-ghost rate-btn"
+                  onClick={() => selectRate(r.deliverable)}
+                >
+                  Select
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* Contact */}
+      <section id="contact" className="contact">
+        <div className="wrap">
+          <div className="contact-grid">
+            <div>
+              <div className="label reveal">Collaborate</div>
+              <h2 className="display h2 reveal">Work with me</h2>
+              <div className="contact-meta reveal">
+                <div className="cm-row">
+                  <span className="label">Email</span>
+                  <a className="cm-v" href={`mailto:${contactEmail}`}>
+                    {contactEmail}
+                  </a>
+                </div>
+                <div className="cm-row">
+                  <span className="label">Based in</span>
+                  <span className="cm-v">{profile.location || 'Manila, Philippines'}</span>
+                </div>
+              </div>
+            </div>
+
+            <div className="reveal">
+              {status === 'success' ? (
+                <div className="form-success">
+                  <div className="display h3">Thank you.</div>
+                  <p style={{ color: 'var(--muted)', margin: 0 }}>Your brief is on its way.</p>
+                  <button type="button" className="linkbtn" onClick={resetForm}>
+                    Send another
+                  </button>
+                </div>
+              ) : (
+                <form className="form" onSubmit={handleSubmit} noValidate>
+                  <div className="form-2">
+                    <div className="field">
+                      <label className="label" htmlFor="f-name">
+                        Name
+                      </label>
+                      <input
+                        className="inp"
+                        id="f-name"
+                        type="text"
+                        required
+                        value={name}
+                        onChange={(e) => setName(e.target.value)}
+                        placeholder="Your name"
+                      />
+                    </div>
+                    <div className="field">
+                      <label className="label" htmlFor="f-email">
+                        Email
+                      </label>
+                      <input
+                        className="inp"
+                        id="f-email"
+                        type="email"
+                        required
+                        value={email}
+                        onChange={(e) => setEmail(e.target.value)}
+                        placeholder="you@brand.com"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="form-2">
+                    <div className="field">
+                      <label className="label" htmlFor="f-company">
+                        Brand
+                      </label>
+                      <input
+                        className="inp"
+                        id="f-company"
+                        type="text"
+                        value={company}
+                        onChange={(e) => setCompany(e.target.value)}
+                        placeholder="Brand name"
+                      />
+                    </div>
+                    <div className="field">
+                      <label className="label" htmlFor="f-deliv">
+                        Package
+                      </label>
+                      <select
+                        className="inp"
+                        id="f-deliv"
+                        value={deliverable}
+                        onChange={(e) => setDeliverable(e.target.value)}
+                      >
+                        <option value="">Select</option>
+                        {deliverables.map((d) => (
+                          <option key={d}>{d}</option>
+                        ))}
+                        <option>Custom</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <div className="field">
+                    <label className="label" htmlFor="f-msg">
+                      Details
+                    </label>
+                    <textarea
+                      className="inp ta"
+                      id="f-msg"
+                      value={message}
+                      onChange={(e) => setMessage(e.target.value)}
+                      placeholder="Timeline, goals, budget"
+                    />
+                  </div>
+
+                  {/* honeypot — bot trap, visually hidden */}
+                  <div style={{ position: 'absolute', left: '-9999px' }} aria-hidden="true">
+                    <input
+                      tabIndex={-1}
+                      autoComplete="off"
+                      value={website}
+                      onChange={(e) => setWebsite(e.target.value)}
+                    />
+                  </div>
+
+                  {status === 'error' && (
+                    <p role="alert" style={{ color: 'var(--accent)', fontSize: 14 }}>
+                      Something went wrong — email me at{' '}
+                      <a className="linkbtn" href={`mailto:${contactEmail}`}>
+                        {contactEmail}
+                      </a>
+                      .
+                    </p>
+                  )}
+
+                  <button
+                    type="submit"
+                    className="btn btn-primary magnetic"
+                    style={{ justifyContent: 'center' }}
+                    disabled={status === 'sending'}
+                  >
+                    {status === 'sending' ? 'Sending...' : 'Send brief'}
+                  </button>
+                </form>
+              )}
+            </div>
+          </div>
+        </div>
+      </section>
     </>
   )
 }
