@@ -14,65 +14,60 @@ export function ContactsTable({
   onSkip: (c: Contact) => void
 }) {
   if (contacts.length === 0) {
-    return (
-      <div className="rounded-xl border border-dashed border-stone-300 bg-white py-16 text-center text-sm text-stone-400">
-        No contacts match your filters.
-      </div>
-    )
+    return <div className="empty">No contacts match your filters.</div>
   }
 
   return (
-    <div className="overflow-hidden rounded-xl border border-stone-200 bg-white">
-      <table className="w-full text-sm">
+    <div className="panel">
+      <table className="table">
         <thead>
-          <tr className="border-b border-stone-200 text-left text-xs uppercase tracking-wide text-stone-400">
-            <th className="px-4 py-3 font-medium">Brand</th>
-            <th className="px-4 py-3 font-medium">Contact</th>
-            <th className="px-4 py-3 font-medium">Country</th>
-            <th className="px-4 py-3 text-center font-medium">Fit</th>
-            <th className="px-4 py-3 font-medium">Status</th>
-            <th className="px-4 py-3 text-right font-medium">Actions</th>
+          <tr>
+            <th>Brand</th>
+            <th>Contact</th>
+            <th>Country</th>
+            <th style={{ textAlign: 'center' }}>Fit</th>
+            <th>Status</th>
+            <th style={{ textAlign: 'right' }}>Actions</th>
           </tr>
         </thead>
         <tbody>
           {contacts.map((c) => (
-            <tr key={c.id} className="border-b border-stone-100 last:border-0 hover:bg-stone-50/60">
-              <td className="px-4 py-3">
-                <div className="font-medium text-stone-900">{c.brand}</div>
+            <tr key={c.id}>
+              <td>
+                <div style={{ fontWeight: 600 }}>{c.brand}</div>
                 <a
                   href={`https://${c.website}`}
                   target="_blank"
                   rel="noreferrer"
-                  className="inline-flex items-center gap-1 text-xs text-stone-400 hover:text-plum-600"
+                  className="inline-flex items-center gap-1"
+                  style={{ fontSize: 12, color: 'var(--muted)', textDecoration: 'none' }}
                 >
-                  {c.website} <ExternalLink size={11} />
+                  {c.website} <ExternalLink size={11} aria-hidden="true" />
                 </a>
               </td>
-              <td className="px-4 py-3">
-                <div className="text-stone-700">{c.email}</div>
-                <div className="text-xs capitalize text-stone-400">{c.emailType}</div>
+              <td>
+                <div>{c.email}</div>
+                <div style={{ fontSize: 12, color: 'var(--faint)', textTransform: 'capitalize' }}>{c.emailType}</div>
               </td>
-              <td className="px-4 py-3 text-stone-600">{c.country}</td>
-              <td className="px-4 py-3 text-center" title={c.fitReason}>
+              <td style={{ color: 'var(--muted)' }}>{c.country}</td>
+              <td style={{ textAlign: 'center' }} title={c.fitReason}>
                 <FitChip score={c.fitScore} />
               </td>
-              <td className="px-4 py-3">
+              <td>
                 <StatusBadge status={c.status} />
               </td>
-              <td className="px-4 py-3">
-                <div className="flex justify-end gap-1">
-                  <button
-                    onClick={() => onDraft(c)}
-                    className="inline-flex items-center gap-1 rounded-lg bg-plum-600 px-2.5 py-1.5 text-xs font-medium text-white hover:bg-plum-700"
-                  >
-                    <Mail size={13} /> Draft
+              <td>
+                <div className="flex justify-end gap-1.5">
+                  <button onClick={() => onDraft(c)} className="btn btn-primary btn-sm">
+                    <Mail size={13} aria-hidden="true" /> Draft
                   </button>
                   <button
                     onClick={() => onSkip(c)}
                     title="Skip this brand"
-                    className="rounded-lg border border-stone-200 px-2 py-1.5 text-stone-400 hover:bg-stone-100 hover:text-stone-600"
+                    aria-label="Skip this brand"
+                    className="btn btn-danger btn-sm"
                   >
-                    <Ban size={13} />
+                    <Ban size={13} aria-hidden="true" />
                   </button>
                 </div>
               </td>

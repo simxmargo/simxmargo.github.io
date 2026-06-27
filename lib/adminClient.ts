@@ -29,3 +29,14 @@ export async function adminFetch(path: string, opts: RequestInit = {}): Promise<
     },
   })
 }
+
+// Multipart upload variant — attaches the admin header but deliberately does NOT
+// set content-type, so the browser supplies `multipart/form-data; boundary=…`.
+// Setting it here (as adminFetch does) would corrupt the body parse on the server.
+export async function adminUpload(path: string, form: FormData): Promise<Response> {
+  return fetch(path, {
+    method: 'POST',
+    body: form,
+    headers: { 'x-admin-secret': getAdminSecret() ?? '' },
+  })
+}

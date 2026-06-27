@@ -10,8 +10,6 @@ export interface Filters {
   minFit: number
 }
 
-const SELECT = 'rounded-lg border border-stone-200 bg-white px-3 py-2 text-sm text-stone-700 focus:border-plum-500 focus:outline-none focus:ring-1 focus:ring-plum-500'
-
 export function FilterBar({
   filters,
   setFilters,
@@ -24,19 +22,28 @@ export function FilterBar({
   return (
     <div className="flex flex-wrap items-center gap-2">
       <div className="relative flex-1 min-w-[200px]">
-        <Search size={16} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-stone-400" />
+        <Search
+          size={16}
+          aria-hidden="true"
+          className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2"
+          style={{ color: 'var(--faint)' }}
+        />
         <input
           value={filters.search}
           onChange={(e) => setFilters({ ...filters, search: e.target.value })}
           placeholder="Search brand or email…"
-          className="w-full rounded-lg border border-stone-200 bg-white py-2 pl-9 pr-3 text-sm text-stone-700 placeholder:text-stone-400 focus:border-plum-500 focus:outline-none focus:ring-1 focus:ring-plum-500"
+          aria-label="Search brand or email"
+          className="input"
+          style={{ paddingLeft: 36 }}
         />
       </div>
 
       <select
         value={filters.status}
         onChange={(e) => setFilters({ ...filters, status: e.target.value as Filters['status'] })}
-        className={SELECT}
+        aria-label="Filter by status"
+        className="select"
+        style={{ width: 'auto' }}
       >
         <option value="all">All statuses</option>
         <option value="new">New</option>
@@ -49,7 +56,9 @@ export function FilterBar({
       <select
         value={filters.country}
         onChange={(e) => setFilters({ ...filters, country: e.target.value })}
-        className={SELECT}
+        aria-label="Filter by country"
+        className="select"
+        style={{ width: 'auto' }}
       >
         <option value="all">All countries</option>
         {countries.map((c) => (
@@ -62,7 +71,9 @@ export function FilterBar({
       <select
         value={filters.minFit}
         onChange={(e) => setFilters({ ...filters, minFit: Number(e.target.value) })}
-        className={SELECT}
+        aria-label="Filter by minimum fit score"
+        className="select"
+        style={{ width: 'auto' }}
       >
         <option value={0}>Any fit</option>
         <option value={6}>Fit ≥ 6</option>

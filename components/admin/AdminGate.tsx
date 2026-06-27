@@ -7,7 +7,11 @@ import { getAdminSecret, setAdminSecret } from '@/lib/adminClient'
 // Lightweight passphrase gate (NOT a login system). Verifies a single shared
 // secret server-side via GET /api/admin/verify, then keeps it in sessionStorage.
 // This is UX/convenience; the real protection is the server-side header check on
-// every /api/admin/* route. Light "studio" theme to match the outreach UI.
+// every /api/admin/* route. Dark editorial "studio" theme to match the admin.
+
+// The gate renders outside the AdminShell, so it sets its own .studio scope; the
+// inline display:flex overrides the .studio grid layout for a centered card.
+const centerStudio = { display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 } as const
 export function AdminGate({ children }: { children: ReactNode }) {
   const [state, setState] = useState<'checking' | 'locked' | 'open'>('checking')
   const [value, setValue] = useState('')
@@ -47,18 +51,24 @@ export function AdminGate({ children }: { children: ReactNode }) {
   }
 
   if (state === 'checking') {
-    return <div className="flex h-screen items-center justify-center text-sm text-stone-400">Loading…</div>
+    return (
+      <div className="studio" style={centerStudio}>
+        <div className="empty" style={{ border: 'none' }}>Loading…</div>
+      </div>
+    )
   }
 
   if (state === 'locked') {
     return (
-      <div className="flex h-screen items-center justify-center bg-stone-100 px-6">
-        <form onSubmit={submit} className="w-full max-w-sm rounded-2xl border border-stone-200 bg-white p-8 shadow-sm">
-          <span className="mb-4 flex h-11 w-11 items-center justify-center rounded-full bg-plum-50 text-plum-600">
+      <div className="studio" style={centerStudio}>
+        <form onSubmit={submit} className="card" style={{ width: '100%', maxWidth: 380 }}>
+          <span className="ico-badge" style={{ marginBottom: 16 }}>
             <Lock size={18} aria-hidden="true" />
           </span>
-          <h1 className="font-display text-xl font-semibold text-stone-900">Studio access</h1>
-          <p className="mt-1 text-sm text-stone-500">Enter the admin passphrase to manage the media kit and outreach.</p>
+          <h1 className="card-title display" style={{ fontSize: 22 }}>Studio access</h1>
+          <p className="card-sub" style={{ marginTop: 6 }}>
+            Enter the admin passphrase to manage the media kit and outreach.
+          </p>
           <label htmlFor="admin-pass" className="sr-only">Admin passphrase</label>
           <input
             id="admin-pass"
@@ -67,17 +77,19 @@ export function AdminGate({ children }: { children: ReactNode }) {
             value={value}
             onChange={(e) => setValue(e.target.value)}
             placeholder="Passphrase"
-            className="mt-5 w-full rounded-lg border border-stone-200 px-3 py-2 text-sm focus:border-plum-500 focus:outline-none focus:ring-1 focus:ring-plum-500"
+            className="input"
+            style={{ marginTop: 20 }}
           />
           {error && (
-            <p role="alert" className="mt-2 text-sm text-red-600">
+            <div className="banner banner-error" role="alert" style={{ marginTop: 12 }}>
               {error}
-            </p>
+            </div>
           )}
           <button
             type="submit"
             disabled={submitting || !value}
-            className="mt-4 w-full rounded-lg bg-plum-600 px-4 py-2 text-sm font-medium text-white hover:bg-plum-700 disabled:opacity-50"
+            className="btn btn-primary"
+            style={{ marginTop: 16, width: '100%', justifyContent: 'center' }}
           >
             {submitting ? 'Checking…' : 'Unlock'}
           </button>

@@ -1,93 +1,253 @@
 'use client'
 
-import { Mail, ShieldCheck } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { Mail, ImageIcon, ShieldCheck, AlertTriangle, RotateCcw } from 'lucide-react'
+import { useQueryClient } from '@tanstack/react-query'
+import { adminFetch } from '@/lib/adminClient'
 import { useStore } from '@/lib/store'
-import type { CreatorProfile } from '@/lib/types'
+import { useAdminResource, adminKeys, type AdminFetchError } from '@/lib/admin/queries'
+import { StudioImageSlot } from '@/components/admin/StudioImageSlot'
+import { FormSkeleton } from '@/components/admin/Skeleton'
+import { themeFaviconDataUrl } from '@/lib/mediakit/favicon'
+import type { PublicProfile } from '@/lib/mediakit-types'
 
-const FIELDS: { key: keyof CreatorProfile; label: string; hint?: string }[] = [
-  { key: 'name', label: 'Your name' },
-  { key: 'handle', label: 'Handle', hint: 'e.g. @yourhandle' },
-  { key: 'niche', label: 'Niche', hint: 'e.g. beauty & fashion' },
-  { key: 'followers', label: 'Followers', hint: 'e.g. 25k' },
-  { key: 'avgViews', label: 'Avg views / post', hint: 'e.g. 40k' },
-  { key: 'engagement', label: 'Engagement', hint: 'e.g. 6%' },
-  { key: 'audience', label: 'Audience' },
-  { key: 'realEmail', label: 'Reply-To email', hint: 'where brands reach you' },
-  { key: 'mailingAddress', label: 'Mailing address', hint: 'CAN-SPAM — a city / PO box is fine' },
-  { key: 'mediaKitUrl', label: 'Media kit URL', hint: 'optional' },
-]
+// App-config-only Studio Settings. All creator identity + outreach fields and the
+// public media-kit images now live on the Profile tab (they share the public_profile
+// row via /api/admin/profile). This page owns ONLY app config that persists to
+// app_settings via /api/admin/settings: the browser-tab favicon and the daily send
+// cap. Reads flow through the shared TanStack Query cache so navigating between admin
+// tabs never re-flashes the skeleton.
+
+interface SettingsData {
+  faviconUrl: string
+  dailyCap: number
+}
+
+type Save = 'idle' | 'saving' | 'saved' | 'error' | 'unconfigured'
 
 export function SettingsPage() {
-  const { profile, updateProfile, dailyCap, setDailyCap } = useStore()
+  const rehydrate = useStore((s) => s.hydrate)
+  const qc = useQueryClient()
+  const q = useAdminResource<SettingsData>('settings')
+  // The theme accent drives the DEFAULT favicon preview (same mark the browser tab +
+  // sidebar show when no custom icon is uploaded). Shared cache key with Theme/Profile.
+  const profileQ = useAdminResource<Partial<PublicProfile>>('profile')
+  const defaultFavicon = themeFaviconDataUrl(profileQ.data?.theme?.accent ?? '')
+
+  const [faviconUrl, setFaviconUrl] = useState('')
+  const [dailyCap, setDailyCap] = useState(20)
+  const [save, setSave] = useState<Save>('idle')
+  const [saveErr, setSaveErr] = useState('')
+
+  // Seed local form state from the cached query data. Stable while cached, so this
+  // only re-runs when the underlying settings actually change.
+  useEffect(() => {
+    if (!q.data) return
+    setFaviconUrl(q.data.faviconUrl ?? '')
+    setDailyCap(typeof q.data.dailyCap === 'number' ? q.data.dailyCap : 20)
+  }, [q.data])
+
+  function onFavicon(url: string) {
+    setFaviconUrl(url)
+    if (save !== 'idle') setSave('idle')
+  }
+  function setCap(n: number) {
+    setDailyCap(n)
+    if (save !== 'idle') setSave('idle')
+  }
+
+  async function onSave() {
+    setSave('saving')
+    setSaveErr('')
+    try {
+      const res = await adminFetch('/api/admin/settings', {
+        method: 'PUT',
+        body: JSON.stringify({ faviconUrl, dailyCap }),
+      })
+      if (res.status === 503) return setSave('unconfigured')
+      if (!res.ok) {
+        setSaveErr(`Save failed (${res.status}).`)
+        return setSave('error')
+      }
+      setSave('saved')
+      qc.invalidateQueries({ queryKey: adminKeys.settings })
+      void rehydrate() // refresh the queue meter so it picks up the new daily cap
+    } catch {
+      setSaveErr('Couldn’t reach the server. Try again.')
+      setSave('error')
+    }
+  }
+
+  const saveLabel = save === 'saving' ? 'Saving…' : save === 'saved' ? 'Saved ✓' : 'Save changes'
+  const cap = dailyCap
+  const capPct = `${(((cap - 5) / 95) * 100).toFixed(2)}%`
+
+  if (q.isLoading) {
+    return <FormSkeleton withHeader titleW={150} subW={420} cards={2} fields={2} />
+  }
+
+  if (q.isError) {
+    const err = q.error as AdminFetchError | null
+    return (
+      <>
+        <header className="main-head">
+          <div>
+            <h1 className="page-title display">Settings</h1>
+            <p className="page-sub">App configuration for your studio.</p>
+          </div>
+        </header>
+        <div className="stack">
+          <div className="banner banner-error" role="alert">
+            <AlertTriangle size={18} aria-hidden="true" />
+            <div>
+              <p style={{ fontWeight: 600, margin: 0 }}>
+                {err?.message ?? `Couldn’t load settings${err?.status ? ` (${err.status})` : ''}.`}
+              </p>
+              <button
+                type="button"
+                onClick={() => void q.refetch()}
+                className="btn btn-ghost btn-sm"
+                style={{ marginTop: 12 }}
+              >
+                <RotateCcw size={14} aria-hidden="true" /> Retry
+              </button>
+            </div>
+          </div>
+        </div>
+      </>
+    )
+  }
 
   return (
-    <div className="max-w-2xl space-y-6">
-      <div>
-        <h1 className="font-display text-2xl font-semibold text-stone-900">Settings</h1>
-        <p className="text-sm text-stone-500">These details fill your email template and protect your sending.</p>
-      </div>
-
-      {/* Sending account — connect a DEDICATED secondary Gmail, never your main one. */}
-      <div className="rounded-xl border border-stone-200 bg-white p-5">
-        <div className="flex items-center gap-2 text-stone-800">
-          <Mail size={18} className="text-plum-600" />
-          <span className="font-medium">Sending account</span>
+    <>
+      <header className="main-head">
+        <div>
+          <h1 className="page-title display">Settings</h1>
+          <p className="page-sub">App configuration — your site icon and outreach sending limits.</p>
         </div>
-        <p className="mt-1 text-sm text-stone-500">
-          Connect a <strong>dedicated secondary Gmail</strong> (not your main one). Replies route to your
-          Reply-To email below, so interested brands reach you directly.
-        </p>
-        {/* TODO(studio-backend): launch Gmail OAuth (gmail.send scope) via Edge Function. */}
-        <button
-          disabled
-          title="Backend pending — see docs/BACKEND_DESIGN.md"
-          className="mt-3 rounded-lg border border-stone-300 bg-white px-4 py-2 text-sm font-medium text-stone-400"
-        >
-          Connect Gmail (backend pending)
+        <button type="button" className="btn btn-primary" onClick={onSave} disabled={save === 'saving'}>
+          {saveLabel}
         </button>
-      </div>
+      </header>
 
-      {/* Creator profile — drives the email merge fields. */}
-      <div className="rounded-xl border border-stone-200 bg-white p-5">
-        <h2 className="mb-3 font-medium text-stone-800">Creator profile</h2>
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-          {FIELDS.map((f) => (
-            <label key={f.key} className="block">
-              <span className="text-xs font-medium uppercase tracking-wide text-stone-400">{f.label}</span>
-              <input
-                value={profile[f.key]}
-                onChange={(e) => updateProfile({ [f.key]: e.target.value } as Partial<CreatorProfile>)}
-                placeholder={f.hint}
-                className="mt-1 w-full rounded-lg border border-stone-200 px-3 py-2 text-sm focus:border-plum-500 focus:outline-none focus:ring-1 focus:ring-plum-500"
+      <div className="stack">
+        {/* Sending account — Gmail OAuth, backend pending */}
+        <section className="card">
+          <div className="card-head">
+            <span className="ico-badge"><Mail size={18} aria-hidden="true" /></span>
+            <h2 className="card-title">Sending account</h2>
+          </div>
+          <p className="card-sub indent">
+            Connect a dedicated secondary Gmail. Replies route to your Reply-to email so brands reach you directly.
+          </p>
+          <div className="card-body">
+            <div className="connect">
+              <div className="flex items-center gap-3">
+                <span className="ico-badge"><Mail size={18} aria-hidden="true" /></span>
+                <div>
+                  <div className="connect-t">No sending account connected</div>
+                  <div className="connect-s">Use a fresh secondary inbox — never your main one.</div>
+                </div>
+              </div>
+              <div className="flex items-center gap-3">
+                <span className="tag">Backend pending</span>
+                {/* TODO(studio-backend): launch Gmail OAuth (gmail.send scope) via Edge Function. */}
+                <button type="button" className="btn btn-ghost is-disabled" disabled title="Backend pending — see docs/BACKEND_DESIGN.md">
+                  Connect Gmail
+                </button>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        {/* Favicon — browser-tab icon for the whole site */}
+        <section className="card">
+          <div className="card-head">
+            <span className="ico-badge"><ImageIcon size={18} aria-hidden="true" /></span>
+            <h2 className="card-title">Favicon</h2>
+          </div>
+          <p className="card-sub indent">The icon shown on the browser tab, across your whole site.</p>
+          <div className="card-body">
+            <div className="img-block">
+              <StudioImageSlot
+                value={faviconUrl}
+                onChange={onFavicon}
+                folder="favicon"
+                shape="rounded"
+                className="slot-favicon"
+                placeholder="Drop favicon"
+                fallbackSrc={defaultFavicon}
+                ariaLabel="Upload favicon"
               />
-            </label>
-          ))}
-        </div>
-      </div>
+              <div>
+                <div className="ib-label">Site icon</div>
+                <div className="ib-help">
+                  This is your current browser-tab icon. By default it&rsquo;s your brand mark in the{' '}
+                  <strong>theme colour</strong> (it follows the accent you pick in Theme). Upload a square
+                  PNG to override it with a custom icon.
+                </div>
+                {faviconUrl && (
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-sm"
+                    style={{ marginTop: 10 }}
+                    onClick={() => onFavicon('')}
+                  >
+                    <RotateCcw size={14} aria-hidden="true" /> Reset to theme default
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+        </section>
 
-      {/* Sending safety — the cap users can tune. */}
-      <div className="rounded-xl border border-stone-200 bg-white p-5">
-        <div className="flex items-center gap-2 text-stone-800">
-          <ShieldCheck size={18} className="text-emerald-600" />
-          <span className="font-medium">Sending safety</span>
-        </div>
-        <label className="mt-3 block">
-          <span className="text-sm text-stone-600">
-            Daily send cap: <strong>{dailyCap}</strong>
-          </span>
-          <input
-            type="range"
-            min={5}
-            max={50}
-            value={dailyCap}
-            onChange={(e) => setDailyCap(Number(e.target.value))}
-            className="mt-2 w-full accent-plum-600"
-          />
-        </label>
-        <p className="mt-1 text-xs text-stone-400">
-          Start low (10–20) and ramp slowly to keep your sending account healthy.
-        </p>
+        {/* Sending safety */}
+        <section className="card">
+          <div className="card-head">
+            <span className="ico-badge"><ShieldCheck size={18} aria-hidden="true" /></span>
+            <h2 className="card-title">Sending safety</h2>
+          </div>
+          <div className="card-body">
+            <div style={{ fontSize: 14.5 }}>
+              Daily send cap: <strong>{cap}</strong>
+            </div>
+            <div className="slider">
+              <div className="slider-track"><div className="slider-fill" style={{ width: capPct }} /></div>
+              <div className="slider-thumb" style={{ left: capPct }} />
+              <input
+                className="slider-input"
+                type="range"
+                min={5}
+                max={100}
+                value={cap}
+                onChange={(e) => setCap(Number(e.target.value))}
+                aria-label="Daily send cap"
+              />
+            </div>
+            <div className="flex justify-between" style={{ marginTop: 8 }}>
+              <span className="muted-sm">5</span>
+              <span className="muted-sm">100</span>
+            </div>
+            <p className="card-sub" style={{ marginTop: 14 }}>
+              Start low (10–20) and ramp slowly to keep your sending account healthy.
+            </p>
+          </div>
+        </section>
+
+        {/* Save state feedback */}
+        {save === 'unconfigured' && (
+          <div className="banner banner-warn" role="alert">
+            <AlertTriangle size={18} aria-hidden="true" />
+            <span>Saving needs SUPABASE_SERVICE_ROLE_KEY set on the server.</span>
+          </div>
+        )}
+        {save === 'error' && (
+          <div className="banner banner-error" role="alert">
+            <AlertTriangle size={18} aria-hidden="true" />
+            <span>{saveErr}</span>
+          </div>
+        )}
       </div>
-    </div>
+    </>
   )
 }

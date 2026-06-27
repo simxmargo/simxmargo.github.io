@@ -30,11 +30,11 @@ export function ContactsPage() {
   }, [contacts, filters])
 
   return (
-    <div className="space-y-5">
-      <div className="flex items-start justify-between gap-4">
+    <>
+      <header className="main-head">
         <div>
-          <h1 className="font-display text-2xl font-semibold text-stone-900">Contacts</h1>
-          <p className="text-sm text-stone-500">
+          <h1 className="page-title display">Contacts</h1>
+          <p className="page-sub">
             Brand leads to pitch, ranked by fit. Draft an email, then review it in the queue.
           </p>
         </div>
@@ -42,19 +42,21 @@ export function ContactsPage() {
         <button
           disabled
           title="Backend pending — see docs/BACKEND_DESIGN.md"
-          className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-stone-300 bg-white px-4 py-2 text-sm font-medium text-stone-400"
+          className="btn btn-ghost is-disabled"
         >
-          <Plus size={15} /> Scrape new brands
+          <Plus size={15} aria-hidden="true" /> Scrape new brands
         </button>
-      </div>
+      </header>
 
-      <StatsBar contacts={contacts} />
-      <FilterBar filters={filters} setFilters={setFilters} countries={countries} />
-      <ContactsTable
-        contacts={filtered}
-        onDraft={setDrafting}
-        onSkip={(c) => setStatus(c.id, 'skip')}
-      />
+      <div className="stack">
+        <StatsBar contacts={contacts} />
+        <FilterBar filters={filters} setFilters={setFilters} countries={countries} />
+        <ContactsTable
+          contacts={filtered}
+          onDraft={setDrafting}
+          onSkip={(c) => setStatus(c.id, 'skip')}
+        />
+      </div>
 
       <ComposeDrawer
         contact={drafting}
@@ -65,6 +67,6 @@ export function ContactsPage() {
           setDrafting(null)
         }}
       />
-    </div>
+    </>
   )
 }

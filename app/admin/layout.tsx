@@ -4,7 +4,7 @@ import { AdminGate } from '@/components/admin/AdminGate'
 // The studio is private. noindex/nofollow keeps it out of search; the AdminGate
 // (single passphrase, server-verified) wraps everything under /admin.
 export const metadata: Metadata = {
-  title: 'Studio · sim x margo',
+  title: { absolute: 'Studio · simxmargo' },
   robots: { index: false, follow: false },
 }
 

@@ -1,8 +1,11 @@
 'use client'
 
-import { useEffect, useState } from 'react'
-import { Users, Send, Settings as Cog, Sparkles, UserCircle, LayoutGrid, BarChart3, Inbox } from 'lucide-react'
+import { useEffect, useState, type CSSProperties } from 'react'
+import { Users, Send, Settings as Cog, UserCircle, LayoutGrid, BarChart3, Inbox, Palette } from 'lucide-react'
 import { useStore } from '@/lib/store'
+import { AdminQueryProvider } from '@/components/admin/AdminQueryProvider'
+import { useAdminResource } from '@/lib/admin/queries'
+import type { PublicProfile } from '@/lib/mediakit-types'
 import { ContactsPage } from '@/components/pages/ContactsPage'
 import { QueuePage } from '@/components/pages/QueuePage'
 import { SettingsPage } from '@/components/pages/SettingsPage'
@@ -10,8 +13,10 @@ import { ProfileEditor } from '@/components/admin/ProfileEditor'
 import { PortfolioManager } from '@/components/admin/PortfolioManager'
 import { SocialStatsEditor } from '@/components/admin/SocialStatsEditor'
 import { InquiriesInbox } from '@/components/admin/InquiriesInbox'
+import { ThemeEditor } from '@/components/admin/ThemeEditor'
+import { SidebarBrand } from '@/components/admin/SidebarBrand'
 
-type Panel = 'profile' | 'portfolio' | 'social' | 'inquiries' | 'contacts' | 'queue' | 'settings'
+type Panel = 'profile' | 'portfolio' | 'social' | 'inquiries' | 'theme' | 'contacts' | 'queue' | 'settings'
 
 const GROUPS = [
   {
@@ -21,6 +26,7 @@ const GROUPS = [
       { key: 'portfolio', label: 'Portfolio', icon: LayoutGrid },
       { key: 'social', label: 'Social Stats', icon: BarChart3 },
       { key: 'inquiries', label: 'Inquiries', icon: Inbox },
+      { key: 'theme', label: 'Theme', icon: Palette },
     ],
   },
   {
@@ -33,10 +39,24 @@ const GROUPS = [
   },
 ] as const
 
-// The private studio shell at /admin. Two nav groups: media-kit management (new)
-// + the existing outreach studio pages (reused verbatim). Client-side panel
-// switch, mirroring the original studio's pattern.
+// The private studio shell at /admin — warm editorial design (port of
+// "Studio Settings.dc.html"), DARK palette, scoped under .studio in globals.css.
+// Two nav groups (media-kit management + outreach studio); client-side panel switch.
 export function AdminShell() {
+  return (
+    <AdminQueryProvider>
+      <StudioShell />
+    </AdminQueryProvider>
+  )
+}
+
+// Rendered INSIDE AdminQueryProvider so it can read the saved theme accent and tint the
+// whole studio chrome with it: overriding the single --accent token on the root cascades
+// to --accent-soft and every var(--accent) usage (incl. position:fixed modals, which
+// still inherit CSS vars). Re-renders live when the Theme tab saves (the shared `profile`
+// query invalidates). Falls back to the studio's own default accent when no valid theme
+// colour is set.
+function StudioShell() {
   const [panel, setPanel] = useState<Panel>('profile')
   const queueCount = useStore((s) => s.queue.length)
   const hydrate = useStore((s) => s.hydrate)
@@ -44,68 +64,59 @@ export function AdminShell() {
     hydrate()
   }, [hydrate])
 
+  const profileQ = useAdminResource<Partial<PublicProfile>>('profile')
+  const rawAccent = profileQ.data?.theme?.accent
+  const accentStyle =
+    typeof rawAccent === 'string' && /^#[0-9a-f]{3,8}$/i.test(rawAccent.trim())
+      ? ({ ['--accent']: rawAccent.trim() } as CSSProperties)
+      : undefined
+
   return (
-    <div className="flex h-screen overflow-hidden bg-stone-100">
-      <aside className="flex w-60 shrink-0 flex-col border-r border-stone-200 bg-white">
-        <div className="flex items-center gap-2 px-5 py-5">
-          <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-plum-600 text-white">
-            <Sparkles size={16} />
-          </span>
-          <div className="leading-tight">
-            <div className="font-display text-lg font-semibold text-stone-900">sim x margo</div>
-            <div className="-mt-0.5 text-xs tracking-wide text-stone-400">STUDIO</div>
+    <div className="studio" style={accentStyle}>
+      <aside className="sidebar">
+        <SidebarBrand />
+
+        {GROUPS.map((group) => (
+          <div key={group.label}>
+            <div className="nav-group">{group.label}</div>
+            {group.items.map(({ key, label, icon: Icon }) => {
+              const active = panel === key
+              return (
+                <button
+                  key={key}
+                  type="button"
+                  onClick={() => setPanel(key as Panel)}
+                  className={`nav-item${active ? ' active' : ''}`}
+                  aria-current={active ? 'page' : undefined}
+                >
+                  <span className="nav-lead">
+                    <Icon size={17} aria-hidden="true" />
+                    {label}
+                  </span>
+                  {key === 'queue' && queueCount > 0 && <span className="nav-count">{queueCount}</span>}
+                </button>
+              )
+            })}
           </div>
+        ))}
+
+        <div className="side-foot">
+          <span className="uavatar">S</span>
+          <a href="/" target="_blank" rel="noreferrer" className="side-link">
+            View public media kit →
+          </a>
         </div>
-
-        <nav className="mt-2 flex flex-col gap-5 px-3">
-          {GROUPS.map((group) => (
-            <div key={group.label}>
-              <div className="px-3 pb-1.5 text-[10px] font-semibold uppercase tracking-wider text-stone-400">
-                {group.label}
-              </div>
-              <div className="flex flex-col gap-1">
-                {group.items.map(({ key, label, icon: Icon }) => {
-                  const active = panel === key
-                  return (
-                    <button
-                      key={key}
-                      onClick={() => setPanel(key as Panel)}
-                      className={`flex items-center justify-between rounded-lg px-3 py-2 text-sm font-medium transition ${
-                        active ? 'bg-plum-50 text-plum-700' : 'text-stone-600 hover:bg-stone-100'
-                      }`}
-                    >
-                      <span className="flex items-center gap-3">
-                        <Icon size={17} />
-                        {label}
-                      </span>
-                      {key === 'queue' && queueCount > 0 && (
-                        <span className="rounded-full bg-amber-100 px-1.5 py-0.5 text-xs font-semibold text-amber-700">
-                          {queueCount}
-                        </span>
-                      )}
-                    </button>
-                  )
-                })}
-              </div>
-            </div>
-          ))}
-        </nav>
-
-        <a href="/" target="_blank" rel="noreferrer" className="mt-auto px-5 py-4 text-xs text-stone-400 transition-colors hover:text-plum-600">
-          View public media kit →
-        </a>
       </aside>
 
-      <main className="flex-1 overflow-y-auto">
-        <div className="mx-auto max-w-5xl px-8 py-8">
-          {panel === 'profile' && <ProfileEditor />}
-          {panel === 'portfolio' && <PortfolioManager />}
-          {panel === 'social' && <SocialStatsEditor />}
-          {panel === 'inquiries' && <InquiriesInbox />}
-          {panel === 'contacts' && <ContactsPage />}
-          {panel === 'queue' && <QueuePage />}
-          {panel === 'settings' && <SettingsPage />}
-        </div>
+      <main className="main">
+        {panel === 'profile' && <ProfileEditor />}
+        {panel === 'portfolio' && <PortfolioManager />}
+        {panel === 'social' && <SocialStatsEditor />}
+        {panel === 'inquiries' && <InquiriesInbox />}
+        {panel === 'theme' && <ThemeEditor />}
+        {panel === 'contacts' && <ContactsPage />}
+        {panel === 'queue' && <QueuePage />}
+        {panel === 'settings' && <SettingsPage />}
       </main>
     </div>
   )

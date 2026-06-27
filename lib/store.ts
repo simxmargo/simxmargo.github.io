@@ -4,74 +4,42 @@ import { create } from 'zustand'
 import type { Contact, ContactStatus, CreatorProfile, QueuedEmail } from './types'
 import { mockContacts } from './mock/contacts'
 import { buildDraft } from './emailTemplate'
-import { isSupabaseConfigured, supabase } from './supabase'
+import { adminFetch } from './adminClient'
 
-// EDIT these defaults in the Settings screen — they fill the template. When
-// Supabase is configured they're overwritten by app_settings.profile on hydrate.
+// Placeholder identity shown for the instant first paint, before hydrate() pulls
+// the real profile from /api/admin/settings (public_profile + derived metrics).
 const defaultProfile: CreatorProfile = {
-  name: 'Your Name', // EDIT
-  handle: '@yourhandle', // EDIT
-  niche: 'beauty & fashion', // EDIT
-  followers: '25k', // EDIT
-  avgViews: '40k', // EDIT
-  engagement: '6%', // EDIT
-  audience: 'women 18–34 in SE Asia, with a growing US following', // EDIT
-  realEmail: 'you@example.com', // EDIT — Reply-To, where brands reach you
-  mailingAddress: 'City, Country', // EDIT — CAN-SPAM requires a real postal address
-  mediaKitUrl: '', // EDIT — optional
+  name: 'sim x margo',
+  handle: '@simxmargo',
+  niche: 'Fashion, beauty & lifestyle',
+  followers: '—',
+  avgViews: '—',
+  engagement: '—',
+  audience: '',
+  realEmail: '',
+  mailingAddress: '',
+  mediaKitUrl: '',
 }
 
-// The `contacts` row shape (snake_case) → our camelCase Contact. Keeping the
-// mapping in one place means components never see the DB naming.
-interface ContactRow {
-  id: string
-  brand: string
-  email: string
-  email_type: Contact['emailType']
-  country: string | null
-  website: string | null
-  fit_score: number | null
-  fit_reason: string | null
-  status: ContactStatus
-  notes: string | null
-  last_emailed_at: string | null
-  created_at: string
-}
-
-function rowToContact(r: ContactRow): Contact {
+// /api/admin/settings GET shape → the email-template CreatorProfile. Identity comes
+// from public_profile; followers/avgViews/engagement are DERIVED from social_stats
+// (read-only here — the future TikTok/IG/FB sync writes social_stats, not this).
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function settingsToProfile(s: any): CreatorProfile {
+  const p = s?.profile ?? {}
+  const m = s?.metrics ?? {}
   return {
-    id: r.id,
-    brand: r.brand,
-    email: r.email,
-    emailType: r.email_type,
-    country: r.country ?? '',
-    website: r.website ?? '',
-    fitScore: r.fit_score,
-    fitReason: r.fit_reason ?? '',
-    status: r.status,
-    notes: r.notes ?? '',
-    lastEmailedAt: r.last_emailed_at,
-    createdAt: r.created_at,
+    name: p.name ?? '',
+    handle: p.handle ?? '',
+    niche: p.niche ?? '',
+    followers: m.followers ?? '—',
+    avgViews: m.avgViews ?? '—',
+    engagement: m.engagement ?? '—',
+    audience: p.audience ?? '',
+    realEmail: p.replyToEmail ?? '',
+    mailingAddress: p.mailingAddress ?? '',
+    mediaKitUrl: p.mediaKitUrl ?? '',
   }
-}
-
-// Debounced, merged writes to the single app_settings row — so typing in Settings
-// doesn't fire a request per keystroke. No-op when Supabase isn't configured.
-let pendingSettings: Record<string, unknown> = {}
-let settingsTimer: ReturnType<typeof setTimeout> | undefined
-function persistSettings(patch: Record<string, unknown>) {
-  if (!supabase) return
-  pendingSettings = { ...pendingSettings, ...patch }
-  clearTimeout(settingsTimer)
-  settingsTimer = setTimeout(() => {
-    const body = { ...pendingSettings, updated_at: new Date().toISOString() }
-    pendingSettings = {}
-    supabase!
-      .from('app_settings')
-      .update(body)
-      .eq('id', 1)
-      .then(({ error }) => error && console.error('[studio] settings persist failed:', error.message))
-  }, 600)
 }
 
 interface StudioState {
@@ -86,8 +54,6 @@ interface StudioState {
   hydrate: () => Promise<void>
   setStatus: (id: string, status: ContactStatus) => void
   updateNotes: (id: string, notes: string) => void
-  updateProfile: (patch: Partial<CreatorProfile>) => void
-  setDailyCap: (n: number) => void
 
   queueDraft: (contactId: string, subject: string, body: string) => void
   removeFromQueue: (queueId: string) => void
@@ -96,8 +62,9 @@ interface StudioState {
 }
 
 export const useStore = create<StudioState>((set, get) => ({
-  // Start on mock data so the UI renders instantly; hydrate() swaps in live data
-  // when Supabase is configured AND reachable (else we stay on mock).
+  // Mock paints instantly; hydrate() swaps in live data from the service-role admin
+  // routes (contacts + app_settings have NO anon RLS policy, so the browser must
+  // go through /api/admin/* — the anon client could never read them).
   contacts: mockContacts,
   profile: defaultProfile,
   queue: [],
@@ -107,29 +74,27 @@ export const useStore = create<StudioState>((set, get) => ({
   loading: false,
 
   hydrate: async () => {
-    if (!isSupabaseConfigured || !supabase) return // no backend → keep mock data
     set({ loading: true })
     try {
       const [contactsRes, settingsRes] = await Promise.all([
-        supabase.from('contacts').select('*').order('fit_score', { ascending: false, nullsFirst: false }),
-        supabase.from('app_settings').select('profile, daily_cap').eq('id', 1).maybeSingle(),
+        adminFetch('/api/admin/contacts'),
+        adminFetch('/api/admin/settings'),
       ])
-      if (contactsRes.error) throw contactsRes.error
+      if (!contactsRes.ok) throw new Error(`contacts ${contactsRes.status}`)
 
-      const rows = (contactsRes.data ?? []) as ContactRow[]
-      const settings = settingsRes.data as { profile?: Partial<CreatorProfile>; daily_cap?: number } | null
-      const hasProfile = settings?.profile && Object.keys(settings.profile).length > 0
+      const contacts = (await contactsRes.json()) as Contact[]
+      const settings = settingsRes.ok ? await settingsRes.json() : null
 
       set((s) => ({
-        contacts: rows.map(rowToContact),
+        contacts: Array.isArray(contacts) ? contacts : [],
         source: 'live',
         loading: false,
-        sentToday: rows.filter((r) => r.status === 'sent').length,
-        profile: hasProfile ? { ...s.profile, ...settings!.profile } : s.profile,
-        dailyCap: settings?.daily_cap ?? s.dailyCap,
+        sentToday: (Array.isArray(contacts) ? contacts : []).filter((c) => c.status === 'sent').length,
+        profile: settings ? settingsToProfile(settings) : s.profile,
+        dailyCap: settings?.dailyCap ?? s.dailyCap,
       }))
     } catch (err) {
-      // Tables not created yet, offline, etc. — degrade to the mock data already loaded.
+      // Not authed yet / route unavailable / offline → keep the mock already loaded.
       console.error('[studio] hydrate failed; staying on mock data:', err instanceof Error ? err.message : err)
       set({ loading: false })
     }
@@ -137,67 +102,39 @@ export const useStore = create<StudioState>((set, get) => ({
 
   setStatus: (id, status) => {
     set((s) => ({ contacts: s.contacts.map((c) => (c.id === id ? { ...c, status } : c)) }))
-    if (supabase) {
-      supabase
-        .from('contacts')
-        .update({ status })
-        .eq('id', id)
-        .then(({ error }) => error && console.error('[studio] setStatus persist failed:', error.message))
-    }
+    adminFetch('/api/admin/contacts', { method: 'PATCH', body: JSON.stringify({ id, status }) })
+      .then((r) => !r.ok && console.error('[studio] setStatus persist failed:', r.status))
+      .catch((e) => console.error('[studio] setStatus persist failed:', e))
   },
 
   updateNotes: (id, notes) => {
     set((s) => ({ contacts: s.contacts.map((c) => (c.id === id ? { ...c, notes } : c)) }))
-    if (supabase) {
-      supabase
-        .from('contacts')
-        .update({ notes })
-        .eq('id', id)
-        .then(({ error }) => error && console.error('[studio] updateNotes persist failed:', error.message))
-    }
+    adminFetch('/api/admin/contacts', { method: 'PATCH', body: JSON.stringify({ id, notes }) })
+      .then((r) => !r.ok && console.error('[studio] updateNotes persist failed:', r.status))
+      .catch((e) => console.error('[studio] updateNotes persist failed:', e))
   },
 
-  updateProfile: (patch) => {
-    const profile = { ...get().profile, ...patch }
-    set({ profile })
-    persistSettings({ profile }) // whole profile jsonb, debounced
-  },
-
-  setDailyCap: (n) => {
-    const dailyCap = Math.max(1, Math.min(50, n))
-    set({ dailyCap })
-    persistSettings({ daily_cap: dailyCap })
-  },
-
-  queueDraft: (contactId, subject, body) =>
-    // Queue stays session-local until the send-one Edge Function exists; we don't
-    // write 'queued' to the DB so the contacts table never claims a send that
-    // hasn't been wired. setStatus is the persisted path.
+  queueDraft: (contactId, subject, body) => {
+    // Queue stays session-local until the send-one Edge Function exists; we mark the
+    // contact 'queued' (persisted via setStatus) but never claim a send not yet wired.
+    const id = `q_${contactId}_${get().queue.length}`
     set((s) => ({
-      queue: [
-        ...s.queue,
-        { id: `q_${contactId}_${s.queue.length}`, contactId, subject, body, createdAt: new Date().toISOString() },
-      ],
-      contacts: s.contacts.map((c) => (c.id === contactId ? { ...c, status: 'queued' } : c)),
-    })),
+      queue: [...s.queue, { id, contactId, subject, body, createdAt: new Date().toISOString() }],
+    }))
+    get().setStatus(contactId, 'queued')
+  },
 
   removeFromQueue: (queueId) => set((s) => ({ queue: s.queue.filter((q) => q.id !== queueId) })),
 
-  markQueuedAsSent: (queueId) =>
-    // MOCKED send (no email actually goes out yet) — intentionally session-local,
-    // so we don't record a false 'sent' in the DB. Real sending will flow through
-    // send_queue → pg_cron → send-one (docs/BACKEND_DESIGN.md §6).
-    set((s) => {
-      const item = s.queue.find((q) => q.id === queueId)
-      if (!item) return s
-      return {
-        queue: s.queue.filter((q) => q.id !== queueId),
-        sentToday: s.sentToday + 1,
-        contacts: s.contacts.map((c) =>
-          c.id === item.contactId ? { ...c, status: 'sent', lastEmailedAt: new Date().toISOString() } : c,
-        ),
-      }
-    }),
+  markQueuedAsSent: (queueId) => {
+    // MOCKED send (no email actually goes out yet) — session-local sentToday bump +
+    // a persisted 'sent' status. Real sending flows through send_queue → pg_cron →
+    // send-one (docs/BACKEND_DESIGN.md §6).
+    const item = get().queue.find((q) => q.id === queueId)
+    if (!item) return
+    set((s) => ({ queue: s.queue.filter((q) => q.id !== queueId), sentToday: s.sentToday + 1 }))
+    get().setStatus(item.contactId, 'sent')
+  },
 }))
 
 // Convenience selector used by the compose drawer.
