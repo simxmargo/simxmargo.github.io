@@ -1,0 +1,81 @@
+name: Deploy media kit to GitHub Pages
+
+# Builds ONLY the public media kit as a static site and publishes it to Pages.
+# The admin studio + all /api routes need a server and are deliberately NOT shipped
+# here — they run locally (`next dev`) or on a real Next host. See
+# docs/DEPLOY_GITHUB_PAGES.md.
+
+on:
+  push:
+    branches: [master, main]
+  workflow_dispatch: {} # manual "rebuild to publish the latest admin-edited content"
+  # schedule:
+  #   - cron: '0 6 * * *'  # optional: nightly refresh of follower counts etc.
+
+# Least-privilege token scopes the Pages deploy needs.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One deploy at a time; newer pushes cancel an in-flight build.
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Switches the repo's Pages source to "GitHub Actions" automatically (using the
+      # workflow's own pages:write token) — so no manual dropdown change is needed even
+      # if Pages was previously set to "Deploy from a branch".
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+        with:
+          enablement: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      # Static export is all-or-nothing for the app/ tree: a single route handler
+      # makes `next build` (output:'export') fail. So carve out the server-only
+      # surfaces in this throwaway CI checkout (the working copy keeps them).
+      - name: Carve out server-only surfaces
+        run: rm -rf app/api app/admin app/opengraph-image.tsx
+
+      - name: Build static export
+        env:
+          EXPORT_STATIC: '1'
+          NEXT_PUBLIC_SITE_URL: https://simxmargo.github.io
+          NEXT_PUBLIC_COLLAB_ENDPOINT: https://zzgypushqcpchfxrjexc.supabase.co/functions/v1/collab
+          # Supabase PUBLISHABLE (anon) values: RLS-protected and already shipped in
+          # the public browser bundle, so committing them here adds zero exposure (the
+          # repo is public anyway) — and it means NO Actions secrets to configure.
+          # To rotate: edit these two lines. To hide them instead: replace each value
+          # with ${{ secrets.NAME }} and add the secret in repo Settings → Actions.
+          NEXT_PUBLIC_SUPABASE_URL: https://zzgypushqcpchfxrjexc.supabase.co
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: sb_publishable_DZxoO2dE_YVKvr1jkBkoDg_G5XxILGn
+        run: npm run build
+
+      - run: touch out/.nojekyll # belt-and-suspenders: stop Jekyll dropping _next/
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: out
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - id: deploy
+        uses: actions/deploy-pages@v4
