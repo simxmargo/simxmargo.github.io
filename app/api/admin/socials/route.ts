@@ -24,6 +24,9 @@ function mapSocial(r: any) {
     history: Array.isArray(r.history) ? r.history : [],
     isVisible: r.is_visible ?? true,
     visible: r.is_visible ?? true,
+    // Integration provenance for the admin UI (manual vs API + last sync time).
+    source: r.source ?? 'manual',
+    syncedAt: r.synced_at ?? null,
   }
 }
 
