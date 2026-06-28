@@ -1,13 +1,14 @@
-import { formatCount, type PortfolioBrand } from '@/lib/mediakit-types'
+import type { BrandMedia, PortfolioBrand } from '@/lib/mediakit-types'
 
 // View-model for the brand-performance MODAL (Claude Design "Media Kit v3").
 // Pure + framework-free so it's trivially testable and stays out of the component.
 //
-// DATA SOURCE — LIVE, per-brand.  The campaign stats (START / END / TOTAL VIEWS)
-// now come from real, admin-editable columns on portfolio_brands; DELIVERABLES is
-// DERIVED from the count of top-content pieces. Any stat the admin leaves blank
-// renders a quiet "~" (never a fabricated value), and the content grid is the
-// brand's REAL managed reels — empty ⇒ the component shows a social CTA instead.
+// DATA SOURCE — LIVE, per-brand.  START / END come from real, admin-editable columns
+// on portfolio_brands; DELIVERABLES, AVG VIEWS and AVG LIKES are all DERIVED from the
+// top-content reels (real ScrapeCreators-pulled play_count / like_count stored on
+// media[]) — so the headline stats can never drift from the clips shown below them.
+// Any stat with no underlying data renders a quiet "~" (never a fabricated value), and
+// the content grid is the brand's REAL managed reels — empty ⇒ the social CTA instead.
 //
 // The CURATED table below is retained ONLY to label the modal header (the campaign
 // `type` + category) for the original showcase brands; it no longer supplies any
@@ -136,42 +137,60 @@ function fmtDate(iso: string | null | undefined): string {
 // The single quiet empty state shared by every modal stat (no "N/A", no fake value).
 const DASH = '~'
 
-// Map a brand's REAL managed content (admin-curated reels) → ContentCard[]. These
-// carry a real thumbnail + post link + manually-entered view/like counts. This is the
-// modal's only content source now; an empty result drives the social CTA empty state.
-function mapRealContent(media: PortfolioBrand['media']): ContentCard[] {
+// The brand's REAL top-content pieces: admin-curated/ScrapeCreators-pulled reels with a
+// post link, capped at 8. This is the ONE definition of "top content" — shared by the
+// content grid AND the avg-views/likes stats so they can never disagree.
+function topContentMedia(media: BrandMedia[]): BrandMedia[] {
   return (Array.isArray(media) ? media : [])
     .filter((m) => m && typeof m.url === 'string' && m.url)
     .slice(0, 8)
-    .map((m, i) => ({
-      viewsLabel: typeof m.views === 'number' ? fmt(m.views) : '',
-      likesLabel: typeof m.likes === 'number' ? fmt(m.likes) : '',
-      caption: m.caption || '',
-      platform: m.platform === 'instagram' ? 'instagram' : 'tiktok',
-      thumbVariant: (i % 4) as 0 | 1 | 2 | 3,
-      thumbUrl: m.thumbUrl || '',
-      url: m.url,
-    }))
+}
+
+// Top-content pieces → ContentCard[] (real thumbnail + post link + scraped view/like
+// counts). An empty result drives the "Watch this collab on social" empty state.
+function mapRealContent(items: BrandMedia[]): ContentCard[] {
+  return items.map((m, i) => ({
+    viewsLabel: typeof m.views === 'number' ? fmt(m.views) : '',
+    likesLabel: typeof m.likes === 'number' ? fmt(m.likes) : '',
+    caption: m.caption || '',
+    platform: m.platform === 'instagram' ? 'instagram' : 'tiktok',
+    thumbVariant: (i % 4) as 0 | 1 | 2 | 3,
+    thumbUrl: m.thumbUrl || '',
+    url: m.url,
+  }))
+}
+
+// Mean of an engagement field across the top-content pieces that actually carry it
+// (IG photos have no play_count, so views can be sparser than the piece count). Rounded
+// to a whole count; null ⇒ no piece had the metric → the caller shows the "~" empty cell.
+function averageMetric(items: BrandMedia[], field: 'views' | 'likes'): number | null {
+  const nums = items
+    .map((m) => m[field])
+    .filter((v): v is number => typeof v === 'number' && Number.isFinite(v))
+  if (nums.length === 0) return null
+  return Math.round(nums.reduce((sum, n) => sum + n, 0) / nums.length)
 }
 
 export function buildBrandDetail(brand: PortfolioBrand): BrandDetailVM {
   const curated = resolveCurated(brand)
-  // The content grid is the brand's REAL managed reels. Empty ⇒ no fabricated cards;
-  // the modal swaps in a social CTA banner (handled in PortfolioGrid).
-  const content = mapRealContent(brand.media)
+  // The brand's REAL top-content reels (shared with the avg stats below). Empty ⇒ no
+  // fabricated cards; the modal swaps in the "Watch this collab on social" state.
+  const items = topContentMedia(brand.media)
+  const content = mapRealContent(items)
 
   // Header labels: curated `type`/category for the original showcase brands, else
   // DB-derived (campaign title + category). Stats below are always live, never curated.
   const key = curated?.cat ?? categoryKey(brand.category)
   const type = curated?.type ?? brand.campaignTitle ?? ''
 
-  // The four stats. START / END / TOTAL VIEWS read the per-brand campaign columns;
-  // DELIVERABLES is DERIVED from the count of top-content pieces. Any blank ⇒ a quiet
-  // "~" placeholder (empty:true → dimmed), never "N/A" and never a fabricated value.
+  // The stats. START / END read the per-brand campaign columns; DELIVERABLES, AVG VIEWS
+  // and AVG LIKES are DERIVED from the same top-content pieces (so they always agree with
+  // the cards). Any value with no data ⇒ a quiet "~" (empty:true → dimmed), never "N/A".
   const start = fmtDate(brand.startDate)
   const end = fmtDate(brand.endDate)
-  const pieces = content.length
-  const tv = brand.totalViews
+  const pieces = items.length
+  const avgViews = averageMetric(items, 'views')
+  const avgLikes = averageMetric(items, 'likes')
 
   const metaCells: MetaCell[] = [
     { label: 'Start', value: start || DASH, empty: !start },
@@ -182,10 +201,16 @@ export function buildBrandDetail(brand: PortfolioBrand): BrandDetailVM {
       empty: pieces === 0,
     },
     {
-      label: 'Total views',
-      value: tv != null ? formatCount(tv) : DASH,
-      accent: tv != null,
-      empty: tv == null,
+      label: 'Avg views',
+      // Same fmt() as the clip cards below → "11M" not "11.0M"; the two always match.
+      value: avgViews != null ? fmt(avgViews) : DASH,
+      accent: avgViews != null,
+      empty: avgViews == null,
+    },
+    {
+      label: 'Avg likes',
+      value: avgLikes != null ? fmt(avgLikes) : DASH,
+      empty: avgLikes == null,
     },
   ]
 

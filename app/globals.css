@@ -216,7 +216,7 @@ body {
 .mk .modal-cat .leg-ic { width: 14px; height: 14px; }
 .mk .modal-name { font-size: clamp(28px, 4vw, 42px); line-height: 1; font-weight: 600; margin: 9px 0 7px; }
 .mk .modal-type { font-size: 14px; color: var(--muted); }
-.mk .modal-meta { display: grid; grid-template-columns: repeat(4, 1fr); gap: clamp(12px, 2vw, 24px); padding: clamp(20px, 3vw, 28px) clamp(24px, 4vw, 44px); border-bottom: 1px solid var(--line); }
+.mk .modal-meta { display: grid; grid-template-columns: repeat(auto-fit, minmax(108px, 1fr)); gap: clamp(12px, 2vw, 24px); padding: clamp(20px, 3vw, 28px) clamp(24px, 4vw, 44px); border-bottom: 1px solid var(--line); }
 .mk .mm { display: flex; flex-direction: column; gap: 6px; }
 .mk .mm-l { font-size: 10.5px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: var(--faint); }
 .mk .mm-v { font-size: clamp(16px, 2vw, 20px); font-weight: 600; }
@@ -245,18 +245,29 @@ body {
 .mk .vstat { display: flex; align-items: center; gap: 4px; font-size: 11.5px; font-weight: 600; color: #fff; }
 .mk .vstat svg { width: 12px; height: 12px; }
 .mk .vcap { font-size: 12.5px; color: var(--muted); line-height: 1.35; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
-/* "No top content" CTA — shown in place of the reel grid. On-brand dark editorial
-   card with a terracotta-tinted icon; the whole card is the link (when linkable). */
-.mk .modal-promo { display: flex; align-items: center; gap: 16px; margin-bottom: clamp(22px, 3vw, 30px); padding: 18px 20px; border: 1px solid var(--line); border-radius: 14px; background: linear-gradient(150deg, color-mix(in srgb, var(--accent) 12%, transparent), transparent 70%), var(--tile, #1c1a14); color: var(--ink); text-decoration: none; transition: border-color 0.2s ease, transform 0.2s ease, background 0.2s ease; }
-.mk a.modal-promo:hover { border-color: var(--accent); transform: translateY(-1px); }
-.mk .modal-promo.is-static { cursor: default; }
-.mk .modal-promo-ic { flex: none; width: 44px; height: 44px; border-radius: 12px; display: flex; align-items: center; justify-content: center; color: var(--accent); background: color-mix(in srgb, var(--accent) 16%, transparent); }
-.mk .modal-promo-ic .ico { width: 22px; height: 22px; }
-.mk .modal-promo-txt { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
-.mk .modal-promo-t { font-size: 15px; font-weight: 600; }
-.mk .modal-promo-s { font-size: 12.5px; color: var(--muted); }
-.mk .modal-promo-go { margin-left: auto; flex: none; font-size: 16px; color: var(--accent); }
-@media (prefers-reduced-motion: reduce) { .mk a.modal-promo:hover { transform: none; } }
+/* "No previews yet" empty state — replaces the reel grid when a brand has no top
+   content. Centered play-badge + heading + a TikTok/Instagram card pair pointing to
+   the creator's channels (ported from Claude Design "Media Kit v3.dc.html" → .mr). */
+.mk .mr { display: flex; flex-direction: column; align-items: center; text-align: center; padding: clamp(20px, 4vw, 40px) clamp(8px, 3vw, 30px) clamp(28px, 4vw, 40px); }
+.mk .mr-visual { position: relative; width: 96px; height: 96px; display: flex; align-items: center; justify-content: center; margin-bottom: 22px; color: var(--accent); }
+.mk .mr-ring { position: absolute; inset: 0; border: 1px solid var(--accent); border-radius: 50%; opacity: 0.45; }
+.mk .mr-ring.r2 { inset: 14px; opacity: 0.22; }
+.mk .mr-play { width: 40px; height: 40px; position: relative; z-index: 1; }
+.mk .mr-title { font-size: clamp(22px, 3vw, 28px); font-weight: 600; line-height: 1.1; }
+.mk .mr-sub { font-size: 14.5px; color: var(--muted); line-height: 1.55; max-width: 42ch; margin: 11px auto 0; }
+.mk .mr-btns { display: grid; grid-template-columns: 1fr 1fr; gap: 13px; width: 100%; max-width: 520px; margin-top: clamp(22px, 3vw, 30px); }
+.mk .mr-btn { display: flex; align-items: center; gap: 13px; text-decoration: none; background: var(--bg); border: 1px solid var(--line); border-radius: 13px; padding: 15px 17px; transition: transform 0.18s ease, border-color 0.18s ease, background 0.18s ease; }
+.mk .mr-btn:hover { transform: translateY(-3px); border-color: var(--accent); background: var(--bg2); }
+.mk .mr-ic { width: 40px; height: 40px; border-radius: 10px; background: var(--bg2); color: var(--ink); display: flex; align-items: center; justify-content: center; flex: none; transition: background 0.18s, color 0.18s; }
+.mk .mr-btn:hover .mr-ic { background: var(--accent); color: #160d09; }
+.mk .mr-ic .ico { width: 21px; height: 21px; display: block; }
+.mk .mr-txt { display: flex; flex-direction: column; gap: 2px; text-align: left; min-width: 0; }
+.mk .mr-txt b { font-size: 15px; font-weight: 600; color: var(--ink); }
+.mk .mr-txt small { font-size: 12px; color: var(--faint); }
+.mk .mr-go { margin-left: auto; color: var(--faint); font-size: 15px; transition: color 0.18s, transform 0.18s; }
+.mk .mr-btn:hover .mr-go { color: var(--accent); transform: translate(2px, -2px); }
+@media (max-width: 620px) { .mk .mr-btns { grid-template-columns: 1fr; } }
+@media (prefers-reduced-motion: reduce) { .mk .mr-btn:hover { transform: none; } .mk .mr-btn:hover .mr-go { transform: none; } }
 
 .mk .modal-foot { padding: clamp(20px, 3vw, 26px) clamp(24px, 4vw, 44px) clamp(26px, 4vw, 36px); border-top: 1px solid var(--line); }
 @media (max-width: 620px) {

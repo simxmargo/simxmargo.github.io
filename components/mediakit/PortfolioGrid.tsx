@@ -1,6 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { formatCount } from '@/lib/mediakit-types'
 import type { PortfolioBrand, SocialStat } from '@/lib/mediakit-types'
 import { buildBrandDetail, type CategoryKey } from '@/lib/mediakit/brandDetail'
 
@@ -9,33 +10,32 @@ interface PortfolioGridProps {
   socials?: SocialStat[]
 }
 
-// The brand modal's "no top content" CTA. Prefer a real TikTok, then Instagram
-// profile (from the creator's social data); fall back to the brand's own site.
-// Returns null only when nothing is linkable → a non-link message is shown instead.
-interface Promo {
+// The brand modal's "no previews yet" state links out to the creator's own channels.
+// It always offers TikTok + Instagram (matching the Media Kit v3 design), using real
+// social data — handle + follower count — when present, with canonical fallbacks.
+interface SocialLink {
+  platform: 'tiktok' | 'instagram'
   href: string
-  platform: 'tiktok' | 'instagram' | 'web'
-  label: string
+  title: string
   sub: string
 }
 
-function pickPromo(socials: SocialStat[], brand: PortfolioBrand): Promo | null {
-  const find = (p: SocialStat['platform']) => socials.find((s) => s.platform === p && s.profileUrl)
-  const tk = find('tiktok')
-  if (tk) return { href: tk.profileUrl, platform: 'tiktok', label: 'Watch the latest on TikTok', sub: tk.handle ? `More from ${tk.handle}` : 'See the newest clips' }
-  const ig = find('instagram')
-  if (ig) return { href: ig.profileUrl, platform: 'instagram', label: 'Watch the latest on Instagram', sub: ig.handle ? `More from ${ig.handle}` : 'See the newest posts' }
-  if (brand.website) return { href: brand.website, platform: 'web', label: 'Visit the brand', sub: 'Explore the partner site' }
-  return null
+const SOCIAL_FALLBACK: Record<SocialLink['platform'], { title: string; href: string; handle: string }> = {
+  tiktok: { title: 'TikTok', href: 'https://www.tiktok.com/@simxmargo', handle: '@simxmargo' },
+  instagram: { title: 'Instagram', href: 'https://www.instagram.com/simxmargo', handle: '@simxmargo' },
 }
 
-function webIcon() {
-  return (
-    <svg className="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8}>
-      <circle cx={12} cy={12} r={9} />
-      <path d="M3 12h18M12 3c2.5 2.7 2.5 15.3 0 18M12 3c-2.5 2.7-2.5 15.3 0 18" />
-    </svg>
-  )
+function socialLinks(socials: SocialStat[]): SocialLink[] {
+  return (['tiktok', 'instagram'] as const).map((platform) => {
+    const stat = socials.find((s) => s.platform === platform)
+    const fb = SOCIAL_FALLBACK[platform]
+    const raw = stat?.handle || fb.handle
+    const handle = raw.startsWith('@') ? raw : `@${raw}` // platforms store handles inconsistently
+    // Show the real follower count when we have the stat; otherwise just the handle
+    // (never a fabricated number — same principle as the modal's "~" empty cells).
+    const sub = stat ? `${handle} · ${formatCount(stat.followers)}` : handle
+    return { platform, href: stat?.profileUrl || fb.href, title: fb.title, sub }
+  })
 }
 
 function fashionIcon() {
@@ -305,8 +305,6 @@ export function PortfolioGrid({ brands, socials = [] }: PortfolioGridProps) {
   }
 
   const vm = active ? buildBrandDetail(active) : null
-  // When a brand has NO top content, the grid is replaced by a social CTA.
-  const promo = active && vm && vm.content.length === 0 ? pickPromo(socials, active) : null
 
   return (
     <section id="partners" className="brands">
@@ -314,7 +312,7 @@ export function PortfolioGrid({ brands, socials = [] }: PortfolioGridProps) {
         <div className="sec-head">
           <div>
             <div className="label reveal">Trusted by</div>
-            <h2 className="display h2 reveal">{brands.length} brand partners</h2>
+            <h2 className="display h2 reveal">Brand partners</h2>
           </div>
           <div className="legend reveal">
             <span className="leg">
@@ -406,41 +404,47 @@ export function PortfolioGrid({ brands, socials = [] }: PortfolioGridProps) {
             )}
 
             <div className="modal-body">
-              {vm.blurb && <p className="modal-blurb">{vm.blurb}</p>}
               {vm.content.length === 0 ? (
-                // No top content yet → a tasteful CTA to the creator's TikTok/IG (or
-                // the brand site) instead of an empty grid. Non-link fallback when
-                // nothing is linkable.
-                promo ? (
-                  <a
-                    className="modal-promo"
-                    href={promo.href}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                  >
-                    <span className="modal-promo-ic" aria-hidden="true">
-                      {promo.platform === 'tiktok'
-                        ? tiktokIcon()
-                        : promo.platform === 'instagram'
-                          ? instagramIcon()
-                          : webIcon()}
-                    </span>
-                    <span className="modal-promo-txt">
-                      <span className="modal-promo-t">{promo.label}</span>
-                      <span className="modal-promo-s">{promo.sub}</span>
-                    </span>
-                    <span className="modal-promo-go" aria-hidden="true">↗</span>
-                  </a>
-                ) : (
-                  <div className="modal-promo is-static">
-                    <span className="modal-promo-txt">
-                      <span className="modal-promo-t">Content coming soon</span>
-                      <span className="modal-promo-s">Top clips from this collab will appear here.</span>
-                    </span>
+                // No previews yet → link out to the creator's channels instead of an
+                // empty grid (ported from Media Kit v3 ".mr" — play badge + TikTok/IG).
+                <div className="mr">
+                  <div className="mr-visual">
+                    <span className="mr-ring" />
+                    <span className="mr-ring r2" />
+                    <svg className="mr-play" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.6}>
+                      <rect x={2.5} y={5} width={19} height={14} rx={3} />
+                      <path d="M10 9.2 15 12l-5 2.8z" fill="currentColor" stroke="none" />
+                    </svg>
                   </div>
-                )
+                  <div className="mr-title display">Watch this collab on social</div>
+                  <div className="mr-sub">
+                    The full videos live on Simone&rsquo;s channels — tap through to see the latest
+                    from the {vm.name} collab.
+                  </div>
+                  <div className="mr-btns">
+                    {socialLinks(socials).map((s) => (
+                      <a
+                        className="mr-btn"
+                        key={s.platform}
+                        href={s.href}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                      >
+                        <span className="mr-ic" aria-hidden="true">
+                          {s.platform === 'tiktok' ? tiktokIcon() : instagramIcon()}
+                        </span>
+                        <span className="mr-txt">
+                          <b>{s.title}</b>
+                          <small>{s.sub}</small>
+                        </span>
+                        <span className="mr-go" aria-hidden="true">↗</span>
+                      </a>
+                    ))}
+                  </div>
+                </div>
               ) : (
                 <>
+                  {vm.blurb && <p className="modal-blurb">{vm.blurb}</p>}
                   <div className="modal-bh">
                     <span className="mbh-t">Top content</span>
                     <span className="mbh-c">{vm.countLabel}</span>
