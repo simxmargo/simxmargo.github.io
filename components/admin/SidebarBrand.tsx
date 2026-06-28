@@ -26,7 +26,7 @@ export function SidebarBrand() {
       </span>
       <div>
         <div className="brand-name display">
-          sim<span style={{ color: 'var(--accent)', fontStyle: 'italic' }}>x</span>margo
+          simxmargo
         </div>
         <div className="brand-sub">STUDIO</div>
       </div>

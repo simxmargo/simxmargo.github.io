@@ -213,13 +213,13 @@ export function ThemeEditor() {
               <div
                 style={{
                   color: '#f3eee4',
-                  fontFamily: 'var(--font-bodoni), "Bodoni Moda", Georgia, serif',
-                  fontSize: 34,
-                  fontWeight: 600,
-                  lineHeight: 1,
+                  fontFamily: 'var(--font-druk), "Druk Wide", "Archivo Black", sans-serif',
+                  fontSize: 22,
+                  fontWeight: 700,
+                  lineHeight: 1.05,
                 }}
               >
-                sim<span style={{ color: safeAccent, fontStyle: 'italic' }}>x</span>margo
+                simxmargo
               </div>
               <span
                 style={{

@@ -1,21 +1,24 @@
 import type { Metadata } from 'next'
-import { Bodoni_Moda, Archivo } from 'next/font/google'
+import { Archivo } from 'next/font/google'
+import localFont from 'next/font/local'
 import { getFaviconUrl, getThemeAccent } from '@/lib/mediakit/data'
 import { themeFaviconDataUrl } from '@/lib/mediakit/favicon'
 import { SITE_URL } from '@/lib/siteUrl'
 import './globals.css'
 
-// Self-hosted + preloaded via next/font (replaces the slow CSS @import waterfall
-// that caused a flash-of-fallback on first paint). Bodoni Moda keeps its `opsz`
-// axis so the big display type renders in the high-contrast optical cut; both
-// fonts are exposed as CSS vars consumed by the .mk (public) and .studio (admin)
-// scopes in globals.css.
-const bodoni = Bodoni_Moda({
-  subsets: ['latin'],
-  axes: ['opsz'],
-  style: ['normal', 'italic'],
+// Druk Wide Bold (self-hosted .ttf) is the DISPLAY face — wide, heavy, editorial —
+// used for headers / wordmark / big numbers across .mk (public) + .studio (admin).
+// Archivo (sans) stays the body + UI face. Both are exposed as CSS vars consumed in
+// globals.css. next/font self-hosts + preloads (no @import flash-of-fallback).
+// NOTE: Druk Wide is a commercial face (Commercial Type); the bundled .ttf must be
+// properly licensed for web use before this ships publicly.
+const druk = localFont({
+  src: '../assets/og/DrukWideBold.ttf',
+  weight: '700',
+  style: 'normal',
   display: 'swap',
-  variable: '--font-bodoni',
+  variable: '--font-druk',
+  fallback: ['Archivo Black', 'system-ui', 'sans-serif'],
 })
 const archivo = Archivo({
   subsets: ['latin'],
@@ -58,7 +61,7 @@ export async function generateMetadata(): Promise<Metadata> {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" className={`${bodoni.variable} ${archivo.variable}`}>
+    <html lang="en" className={`${druk.variable} ${archivo.variable}`}>
       <body>{children}</body>
     </html>
   )
