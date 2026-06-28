@@ -2,6 +2,7 @@
 
 import { useState, type CSSProperties, type FormEvent } from 'react'
 import { signInAdmin, useAdminSession } from '@/lib/admin/auth'
+import { readCachedAccent, accentStyle } from '@/lib/admin/themeCache'
 
 // Replaces AdminGate: a single password field (the admin email is fixed in config, so
 // the influencer only types a password). On success the Supabase session persists, so
@@ -12,6 +13,10 @@ export function AdminLogin({ children }: { children: React.ReactNode }) {
   const [password, setPassword] = useState('')
   const [status, setStatus] = useState<'idle' | 'submitting' | 'error'>('idle')
   const [focused, setFocused] = useState(false)
+  // Tint the login portal with the saved accent from cache (it's pre-auth, so there's
+  // no theme data to read) — so the studio's colour is consistent before sign-in too.
+  const [cachedAccent] = useState(readCachedAccent)
+  const accent = accentStyle(cachedAccent)
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault()
@@ -38,8 +43,23 @@ export function AdminLogin({ children }: { children: React.ReactNode }) {
   if (session) return <>{children}</>
 
   return (
-    <div className="studio" style={screen}>
+    <div className="studio" style={{ ...screen, ...accent }}>
       <form onSubmit={onSubmit} style={card} aria-label="Studio login">
+        {/* Chrome/Safari paint a pale-blue background on autofilled fields that inline
+            styles can't override (the :-webkit-autofill pseudo wins). Re-skin it to the
+            dark theme via the inset box-shadow trick; the 9999s transition kills the flash. */}
+        <style>{`
+          #admin-pw:-webkit-autofill,
+          #admin-pw:-webkit-autofill:hover,
+          #admin-pw:-webkit-autofill:focus,
+          #admin-pw:-webkit-autofill:active {
+            -webkit-box-shadow: 0 0 0 1000px var(--field, #211d18) inset;
+            -webkit-text-fill-color: var(--ink, #f1ece2);
+            caret-color: var(--ink, #f1ece2);
+            border-radius: 10px;
+            transition: background-color 9999s ease-out 0s;
+          }
+        `}</style>
         <h1 style={title}>simxmargo studio</h1>
         <p style={sub}>Enter your password to edit the media kit.</p>
 

@@ -1,10 +1,11 @@
 'use client'
 
-import { useEffect, useState, type CSSProperties } from 'react'
+import { useEffect, useState } from 'react'
 import { Users, Send, Settings as Cog, UserCircle, LayoutGrid, BarChart3, Inbox, Palette } from 'lucide-react'
 import { useStore } from '@/lib/store'
 import { AdminQueryProvider } from '@/components/admin/AdminQueryProvider'
 import { useAdminResource } from '@/lib/admin/queries'
+import { readCachedAccent, writeCachedAccent, accentStyle } from '@/lib/admin/themeCache'
 import type { PublicProfile } from '@/lib/mediakit-types'
 import { ContactsPage } from '@/components/pages/ContactsPage'
 import { QueuePage } from '@/components/pages/QueuePage'
@@ -66,14 +67,18 @@ function StudioShell() {
   }, [hydrate])
 
   const profileQ = useAdminResource<Partial<PublicProfile>>('profile')
-  const rawAccent = profileQ.data?.theme?.accent
-  const accentStyle =
-    typeof rawAccent === 'string' && /^#[0-9a-f]{3,8}$/i.test(rawAccent.trim())
-      ? ({ ['--accent']: rawAccent.trim() } as CSSProperties)
-      : undefined
+  // Paint the saved accent on FIRST render from the localStorage cache, so the studio
+  // chrome doesn't flash the default accent while the profile query loads. The live
+  // value wins as soon as it arrives, and is written back to the cache for next time.
+  const [cachedAccent] = useState(readCachedAccent)
+  const liveAccent = profileQ.data?.theme?.accent
+  useEffect(() => {
+    writeCachedAccent(liveAccent)
+  }, [liveAccent])
+  const style = accentStyle(typeof liveAccent === 'string' ? liveAccent : cachedAccent)
 
   return (
-    <div className="studio" style={accentStyle}>
+    <div className="studio" style={style}>
       <aside className="sidebar">
         <SidebarBrand />
 
