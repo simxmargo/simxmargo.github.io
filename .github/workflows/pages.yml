@@ -50,9 +50,21 @@ jobs:
       - name: Carve out the dynamic OG route
         run: rm -rf app/opengraph-image.tsx
 
+      # Regenerate public/og.png from LIVE data so the share thumbnail never goes stale.
+      # Must run BEFORE the build (next copies public/ into the export). next/og can't
+      # run under output:'export', so this uses satori + resvg directly.
+      - name: Generate OG card from live data
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: https://zzgypushqcpchfxrjexc.supabase.co
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: sb_publishable_DZxoO2dE_YVKvr1jkBkoDg_G5XxILGn
+        run: node scripts/gen-og.mjs
+
       - name: Build static export
         env:
           EXPORT_STATIC: '1'
+          # Cache-buster appended to the og:image URL so Discord/social re-fetch the
+          # freshly generated card on every deploy (they cache by full URL).
+          OG_VERSION: ${{ github.sha }}
           NEXT_PUBLIC_SITE_URL: https://simxmargo.github.io
           NEXT_PUBLIC_COLLAB_ENDPOINT: https://zzgypushqcpchfxrjexc.supabase.co/functions/v1/collab
           # Supabase PUBLISHABLE (anon) values: RLS-protected and already shipped in

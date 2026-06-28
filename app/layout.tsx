@@ -40,15 +40,17 @@ export async function generateMetadata(): Promise<Metadata> {
   return {
     metadataBase: new URL(SITE_URL),
     title: { default: 'simxmargo — Media Kit', template: '%s · simxmargo' },
+    // No hardcoded follower count here — the live count lives on the OG image (which
+    // regenerates each deploy) and in app/page.tsx's computed description for "/".
     description:
-      'Fashion & beauty creator · 4.4M followers across TikTok, Instagram & Facebook. Collaborate with simxmargo.',
+      'Fashion & beauty creator across TikTok, Instagram & Facebook. Collaborate with simxmargo.',
     icons: { icon: favicon, shortcut: favicon, apple: favicon },
     openGraph: {
       siteName: 'simxmargo',
       type: 'website',
       url: '/',
       title: 'simxmargo — Media Kit',
-      description: 'Fashion & beauty creator · 4.4M followers. Collaborate with simxmargo.',
+      description: 'Fashion & beauty creator across TikTok, Instagram & Facebook. Collaborate with simxmargo.',
     },
     twitter: { card: 'summary_large_image' },
   }

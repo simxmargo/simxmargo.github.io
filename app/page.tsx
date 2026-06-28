@@ -25,9 +25,13 @@ export async function generateMetadata(): Promise<Metadata> {
       url: '/',
       type: 'website',
       // Static export carves out app/opengraph-image.tsx, so the page declares the
-      // OG card itself (public/og.png). Locally that route auto-injects it — gating
-      // on EXPORT_STATIC prevents emitting duplicate og:image tags.
-      ...(process.env.EXPORT_STATIC === '1' ? { images: ['/og.png'] } : {}),
+      // OG card itself (public/og.png, regenerated from live data each deploy). The
+      // ?v=<sha> cache-buster makes Discord/social re-fetch the new card (they cache
+      // by URL). Locally the dynamic route auto-injects the tag — gating on
+      // EXPORT_STATIC prevents emitting duplicate og:image tags.
+      ...(process.env.EXPORT_STATIC === '1'
+        ? { images: [`/og.png?v=${(process.env.OG_VERSION || 'dev').slice(0, 8)}`] }
+        : {}),
     },
   }
 }
