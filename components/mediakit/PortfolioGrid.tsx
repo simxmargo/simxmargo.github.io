@@ -1,11 +1,41 @@
 'use client'
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { PortfolioBrand } from '@/lib/mediakit-types'
+import type { PortfolioBrand, SocialStat } from '@/lib/mediakit-types'
 import { buildBrandDetail, type CategoryKey } from '@/lib/mediakit/brandDetail'
 
 interface PortfolioGridProps {
   brands: PortfolioBrand[]
+  socials?: SocialStat[]
+}
+
+// The brand modal's "no top content" CTA. Prefer a real TikTok, then Instagram
+// profile (from the creator's social data); fall back to the brand's own site.
+// Returns null only when nothing is linkable → a non-link message is shown instead.
+interface Promo {
+  href: string
+  platform: 'tiktok' | 'instagram' | 'web'
+  label: string
+  sub: string
+}
+
+function pickPromo(socials: SocialStat[], brand: PortfolioBrand): Promo | null {
+  const find = (p: SocialStat['platform']) => socials.find((s) => s.platform === p && s.profileUrl)
+  const tk = find('tiktok')
+  if (tk) return { href: tk.profileUrl, platform: 'tiktok', label: 'Watch the latest on TikTok', sub: tk.handle ? `More from ${tk.handle}` : 'See the newest clips' }
+  const ig = find('instagram')
+  if (ig) return { href: ig.profileUrl, platform: 'instagram', label: 'Watch the latest on Instagram', sub: ig.handle ? `More from ${ig.handle}` : 'See the newest posts' }
+  if (brand.website) return { href: brand.website, platform: 'web', label: 'Visit the brand', sub: 'Explore the partner site' }
+  return null
+}
+
+function webIcon() {
+  return (
+    <svg className="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8}>
+      <circle cx={12} cy={12} r={9} />
+      <path d="M3 12h18M12 3c2.5 2.7 2.5 15.3 0 18M12 3c-2.5 2.7-2.5 15.3 0 18" />
+    </svg>
+  )
 }
 
 function fashionIcon() {
@@ -83,7 +113,7 @@ function catIcon(category: string) {
 
 const CLOSE_MS = 240
 
-export function PortfolioGrid({ brands }: PortfolioGridProps) {
+export function PortfolioGrid({ brands, socials = [] }: PortfolioGridProps) {
   // Split brands across the TWO marquee rows with NO cross-row repetition. An
   // explicit rowIndex (assigned in admin) wins; otherwise auto-split the list in half.
   // (Each row still renders its own subset twice — that duplication is the seamless
@@ -275,6 +305,8 @@ export function PortfolioGrid({ brands }: PortfolioGridProps) {
   }
 
   const vm = active ? buildBrandDetail(active) : null
+  // When a brand has NO top content, the grid is replaced by a social CTA.
+  const promo = active && vm && vm.content.length === 0 ? pickPromo(socials, active) : null
 
   return (
     <section id="partners" className="brands">
@@ -365,7 +397,9 @@ export function PortfolioGrid({ brands }: PortfolioGridProps) {
                 {vm.metaCells.map((cell) => (
                   <div className="mm" key={cell.label}>
                     <span className="mm-l">{cell.label}</span>
-                    <span className={`mm-v${cell.accent ? ' accent' : ''}`}>{cell.value}</span>
+                    <span className={`mm-v${cell.accent ? ' accent' : ''}${cell.empty ? ' is-empty' : ''}`}>
+                      {cell.value}
+                    </span>
                   </div>
                 ))}
               </div>
@@ -373,7 +407,39 @@ export function PortfolioGrid({ brands }: PortfolioGridProps) {
 
             <div className="modal-body">
               {vm.blurb && <p className="modal-blurb">{vm.blurb}</p>}
-              {vm.content.length > 0 && (
+              {vm.content.length === 0 ? (
+                // No top content yet → a tasteful CTA to the creator's TikTok/IG (or
+                // the brand site) instead of an empty grid. Non-link fallback when
+                // nothing is linkable.
+                promo ? (
+                  <a
+                    className="modal-promo"
+                    href={promo.href}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    <span className="modal-promo-ic" aria-hidden="true">
+                      {promo.platform === 'tiktok'
+                        ? tiktokIcon()
+                        : promo.platform === 'instagram'
+                          ? instagramIcon()
+                          : webIcon()}
+                    </span>
+                    <span className="modal-promo-txt">
+                      <span className="modal-promo-t">{promo.label}</span>
+                      <span className="modal-promo-s">{promo.sub}</span>
+                    </span>
+                    <span className="modal-promo-go" aria-hidden="true">↗</span>
+                  </a>
+                ) : (
+                  <div className="modal-promo is-static">
+                    <span className="modal-promo-txt">
+                      <span className="modal-promo-t">Content coming soon</span>
+                      <span className="modal-promo-s">Top clips from this collab will appear here.</span>
+                    </span>
+                  </div>
+                )
+              ) : (
                 <>
                   <div className="modal-bh">
                     <span className="mbh-t">Top content</span>

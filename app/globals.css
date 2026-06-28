@@ -221,6 +221,8 @@ body {
 .mk .mm-l { font-size: 10.5px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: var(--faint); }
 .mk .mm-v { font-size: clamp(16px, 2vw, 20px); font-weight: 600; }
 .mk .mm-v.accent { color: var(--accent); }
+/* Quiet "~" empty state for an unset stat — dim + light so it reads as "no value". */
+.mk .mm-v.is-empty { color: var(--faint); font-weight: 500; }
 .mk .modal-body { padding: clamp(22px, 3vw, 30px) clamp(24px, 4vw, 44px) 0; max-height: 46vh; overflow-y: auto; }
 .mk .modal-blurb { font-size: 14.5px; color: var(--muted); line-height: 1.55; margin: 0 0 clamp(20px, 3vw, 26px); }
 .mk .modal-bh { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 18px; }
@@ -243,6 +245,19 @@ body {
 .mk .vstat { display: flex; align-items: center; gap: 4px; font-size: 11.5px; font-weight: 600; color: #fff; }
 .mk .vstat svg { width: 12px; height: 12px; }
 .mk .vcap { font-size: 12.5px; color: var(--muted); line-height: 1.35; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+/* "No top content" CTA — shown in place of the reel grid. On-brand dark editorial
+   card with a terracotta-tinted icon; the whole card is the link (when linkable). */
+.mk .modal-promo { display: flex; align-items: center; gap: 16px; margin-bottom: clamp(22px, 3vw, 30px); padding: 18px 20px; border: 1px solid var(--line); border-radius: 14px; background: linear-gradient(150deg, color-mix(in srgb, var(--accent) 12%, transparent), transparent 70%), var(--tile, #1c1a14); color: var(--ink); text-decoration: none; transition: border-color 0.2s ease, transform 0.2s ease, background 0.2s ease; }
+.mk a.modal-promo:hover { border-color: var(--accent); transform: translateY(-1px); }
+.mk .modal-promo.is-static { cursor: default; }
+.mk .modal-promo-ic { flex: none; width: 44px; height: 44px; border-radius: 12px; display: flex; align-items: center; justify-content: center; color: var(--accent); background: color-mix(in srgb, var(--accent) 16%, transparent); }
+.mk .modal-promo-ic .ico { width: 22px; height: 22px; }
+.mk .modal-promo-txt { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.mk .modal-promo-t { font-size: 15px; font-weight: 600; }
+.mk .modal-promo-s { font-size: 12.5px; color: var(--muted); }
+.mk .modal-promo-go { margin-left: auto; flex: none; font-size: 16px; color: var(--accent); }
+@media (prefers-reduced-motion: reduce) { .mk a.modal-promo:hover { transform: none; } }
+
 .mk .modal-foot { padding: clamp(20px, 3vw, 26px) clamp(24px, 4vw, 44px) clamp(26px, 4vw, 36px); border-top: 1px solid var(--line); }
 @media (max-width: 620px) {
   .mk .modal-meta { grid-template-columns: repeat(2, 1fr); gap: 16px; }
@@ -408,6 +423,8 @@ body {
 .studio .flabel { font-size: 10.5px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: var(--faint); }
 .studio .input, .studio .textarea, .studio .select { background: var(--field); border: 1px solid var(--line); border-radius: 9px; padding: 11px 13px; font-family: inherit; font-size: 14.5px; color: var(--ink); width: 100%; transition: border-color 0.15s; }
 .studio .input:focus, .studio .textarea:focus, .studio .select:focus { border-color: var(--accent); outline: none; }
+/* Native date inputs render their calendar/picker for the dark studio surface. */
+.studio .input[type="date"] { color-scheme: dark; }
 .studio .input:read-only, .studio .input.is-readonly { background: var(--line2); color: var(--muted); cursor: default; }
 .studio .textarea { min-height: 96px; resize: vertical; line-height: 1.5; }
 .studio .field-hint { font-size: 11.5px; color: var(--faint); }

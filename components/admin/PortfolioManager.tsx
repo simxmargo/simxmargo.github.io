@@ -58,6 +58,9 @@ interface BrandForm {
   featured: boolean
   rowIndex: '' | 1 | 2 // '' = auto-split
   media: ContentDraft[]
+  startDate: string // ISO 'YYYY-MM-DD'; '' = hidden (~)
+  endDate: string // ISO 'YYYY-MM-DD'; '' = hidden (~)
+  totalViews: string // compact or raw; '' = hidden (~)
 }
 
 const EMPTY_FORM: BrandForm = {
@@ -70,6 +73,9 @@ const EMPTY_FORM: BrandForm = {
   featured: false,
   rowIndex: '',
   media: [],
+  startDate: '',
+  endDate: '',
+  totalViews: '',
 }
 
 // PortfolioBrand.media (BrandMedia[], numbers) → editor drafts (strings).
@@ -95,6 +101,9 @@ const editFormFromBrand = (b: AdminBrand): BrandForm => ({
   featured: b.featured,
   rowIndex: b.rowIndex === 1 || b.rowIndex === 2 ? b.rowIndex : '',
   media: toDrafts(b.media),
+  startDate: b.startDate ?? '',
+  endDate: b.endDate ?? '',
+  totalViews: typeof b.totalViews === 'number' ? String(b.totalViews) : '',
 })
 
 // Split the brands across the TWO carousel lanes EXACTLY like the public page
@@ -568,6 +577,11 @@ function BrandEditorModal({
   const panelRef = useRef<HTMLFormElement>(null)
   useDialog(panelRef, onCancel)
 
+  // Live echo of the typed total in the compact form the modal renders ("3.4M"),
+  // so the influencer can sanity-check it as they type. '' (blank) ⇒ hidden on the page.
+  const totalViewsParsed = parseCompact(form.totalViews)
+  const totalViewsPreview = totalViewsParsed != null ? formatCount(totalViewsParsed) : ''
+
   async function save(e: React.FormEvent) {
     e.preventDefault()
     if (!form.brand.trim()) {
@@ -657,6 +671,55 @@ function BrandEditorModal({
           <div className="field">
             <label className="flabel" htmlFor="brand-campaign">Campaign title</label>
             <input id="brand-campaign" className="input" placeholder="e.g. Holiday 2025 partnership" value={form.campaignTitle} onChange={(e) => set('campaignTitle', e.target.value)} />
+          </div>
+
+          {/* Campaign stats shown in this brand's public modal (Start / End / Total
+              views). All optional — leave any blank to show a quiet "~" on the page. */}
+          <div className="grid2">
+            <div className="field">
+              <label className="flabel" htmlFor="brand-start">Start date</label>
+              <input
+                id="brand-start"
+                type="date"
+                className="input"
+                value={form.startDate}
+                onChange={(e) => set('startDate', e.target.value)}
+              />
+              <span className="field-hint">Leave blank to hide.</span>
+            </div>
+            <div className="field">
+              <label className="flabel" htmlFor="brand-end">End date</label>
+              <input
+                id="brand-end"
+                type="date"
+                className="input"
+                value={form.endDate}
+                onChange={(e) => set('endDate', e.target.value)}
+              />
+              <span className="field-hint">Leave blank to hide.</span>
+            </div>
+          </div>
+
+          <div className="field">
+            <label className="flabel" htmlFor="brand-total-views">Total views</label>
+            <input
+              id="brand-total-views"
+              type="text"
+              inputMode="numeric"
+              className="input"
+              placeholder="e.g. 3.4M or 3400000"
+              value={form.totalViews}
+              onChange={(e) => set('totalViews', e.target.value)}
+            />
+            <span className="field-hint">
+              Campaign-wide total. Leave blank to hide.
+              {totalViewsPreview && (
+                <>
+                  {' '}
+                  · shows as <strong>{totalViewsPreview}</strong>
+                </>
+              )}
+            </span>
           </div>
 
           <div className="field-card">

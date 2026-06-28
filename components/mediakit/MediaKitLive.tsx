@@ -40,7 +40,7 @@ export function MediaKitLive({ initial }: { initial: MediaKitData }) {
       <TopNav name={profile.displayName} />
       <HeroSection profile={profile} socials={socials} />
       <SocialStatsStrip socials={socials} />
-      <PortfolioGrid brands={brands} />
+      <PortfolioGrid brands={brands} socials={socials} />
       <RateAndContact profile={profile} />
       <MediaKitFooter profile={profile} socials={socials} />
     </>

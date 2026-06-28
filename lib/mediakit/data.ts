@@ -69,6 +69,9 @@ function mapBrand(r: any): PortfolioBrand {
     category: r.category ?? '',
     featured: Boolean(r.featured),
     rowIndex: r.row_index === 1 || r.row_index === 2 ? r.row_index : undefined,
+    startDate: r.start_date ?? null,
+    endDate: r.end_date ?? null,
+    totalViews: r.total_views != null ? Number(r.total_views) : null,
   }
 }
 /* eslint-enable @typescript-eslint/no-explicit-any */

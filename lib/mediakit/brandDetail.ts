@@ -1,17 +1,17 @@
-import type { PortfolioBrand } from '@/lib/mediakit-types'
+import { formatCount, type PortfolioBrand } from '@/lib/mediakit-types'
 
-// View-model for the brand-performance MODAL (Claude Design "Media Kit v3"),
-// matching the design's expected output exactly. Pure + framework-free so it's
-// trivially testable and stays out of the component.
+// View-model for the brand-performance MODAL (Claude Design "Media Kit v3").
+// Pure + framework-free so it's trivially testable and stays out of the component.
 //
-// DATA SOURCE — CURATED.  The modal's campaign data (type, start/end, deliverables,
-// total views, and the top-clip "peak" the content grid is built from) is the
-// creator's authored showcase content, hardcoded in the source design's DETAILS
-// table. It is NOT derived from the live portfolio_brands metrics (those are empty),
-// so we port the table verbatim and join it to each live brand by NAME. This is the
-// single source of these numbers — see docs/mediakit-brand-detail-backend.md for the
-// path to make them admin-editable (move CURATED → DB columns) later.
-//   TODO(mediakit-brand-detail-backend): persist per-brand campaign detail in the DB.
+// DATA SOURCE — LIVE, per-brand.  The campaign stats (START / END / TOTAL VIEWS)
+// now come from real, admin-editable columns on portfolio_brands; DELIVERABLES is
+// DERIVED from the count of top-content pieces. Any stat the admin leaves blank
+// renders a quiet "~" (never a fabricated value), and the content grid is the
+// brand's REAL managed reels — empty ⇒ the component shows a social CTA instead.
+//
+// The CURATED table below is retained ONLY to label the modal header (the campaign
+// `type` + category) for the original showcase brands; it no longer supplies any
+// shown numbers. Brands not in it degrade gracefully to DB-derived labels.
 
 export type CategoryKey = 'fashion' | 'beauty' | 'app' | 'media'
 
@@ -19,6 +19,7 @@ export interface MetaCell {
   label: string
   value: string
   accent?: boolean
+  empty?: boolean // true when value is the "~" placeholder → rendered dimmed
 }
 
 export interface ContentCard {
@@ -61,14 +62,9 @@ const CAT_LABEL: Record<CategoryKey, string> = {
   media: 'Media',
 }
 
-const CAPTIONS: Record<CategoryKey, string[]> = {
-  fashion: ['styling the new drop ✦', 'vs the female gaze', 'get ready with me', 'fit check: 3 ways'],
-  beauty: ['my everyday glam', 'grwm: soft glow', 'first impressions', 'one product · 3 looks'],
-  app: ['how I edit my reels', 'my full editing workflow', 'before / after', 'quick tutorial ✦'],
-  media: ['behind the scenes', 'the campaign cut', 'feature drop', 'on set with the team'],
-}
-
-// Ported verbatim from "Media Kit v3.dc.html" (BRANDS + DETAILS), keyed by slug.
+// Ported from "Media Kit v3.dc.html" (BRANDS + DETAILS), keyed by slug. Only `cat`
+// and `type` are read now (header labels); the date/total/peak values are retained
+// as reference but no longer rendered — live DB columns supply those stats.
 const CURATED: Record<string, CuratedDetail> = {
   fashionnova: { name: 'Fashion Nova', cat: 'fashion', type: 'Brand partner', start: '11/02/25', end: '12/14/25', deliv: '2 TikToks · 1 Reel', total: 3_400_000, peak: 1_800_000 },
   ohpolly: { name: 'Oh Polly', cat: 'fashion', type: 'Lookbook campaign', start: '10/20/25', end: '11/10/25', deliv: '1 TikTok · 3 Stories', total: 1_900_000, peak: 980_000 },
@@ -119,34 +115,30 @@ export function categoryKey(category: string): CategoryKey {
   return 'fashion'
 }
 
-// 1_300_000 → "1.3M", 740_000 → "740K" (the design's fmtViews).
+// 1_300_000 → "1.3M", 740_000 → "740K" (per-clip view/like labels).
 function fmt(n: number): string {
   if (n >= 1e6) return `${(n / 1e6).toFixed(1).replace(/\.0$/, '')}M`
   if (n >= 1e3) return `${Math.round(n / 1e3)}K`
   return String(n)
 }
 
-// Top-clip falloff from the design. Cards are peak × these (NOT normalized to total —
-// the design keeps a separate `peak` per brand, so the cards don't sum to total).
-const FALLOFF = [1, 0.62, 0.41, 0.29]
-
-function buildContent(cat: CategoryKey, peak: number): ContentCard[] {
-  const caps = CAPTIONS[cat]
-  return FALLOFF.map((f, i) => {
-    const views = Math.round(peak * f)
-    return {
-      viewsLabel: fmt(views),
-      likesLabel: fmt(Math.round(views * 0.11)),
-      caption: caps[i % caps.length],
-      platform: i === 1 ? 'instagram' : 'tiktok',
-      thumbVariant: (i % 4) as 0 | 1 | 2 | 3,
-    }
-  })
+// A date column ('YYYY-MM-DD') → 'MM/DD/YY' for the modal. Parsed from the string
+// parts (NOT `new Date()`) so it's timezone-safe. Blank/malformed ⇒ '' (caller
+// substitutes the "~" empty state).
+function fmtDate(iso: string | null | undefined): string {
+  if (!iso) return ''
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso.trim())
+  if (!m) return ''
+  const [, y, mo, d] = m
+  return `${mo}/${d}/${y.slice(2)}`
 }
 
+// The single quiet empty state shared by every modal stat (no "N/A", no fake value).
+const DASH = '~'
+
 // Map a brand's REAL managed content (admin-curated reels) → ContentCard[]. These
-// carry a real thumbnail + post link + manually-entered view/like counts. Used in
-// preference to the synthetic falloff whenever a brand has at least one item.
+// carry a real thumbnail + post link + manually-entered view/like counts. This is the
+// modal's only content source now; an empty result drives the social CTA empty state.
 function mapRealContent(media: PortfolioBrand['media']): ContentCard[] {
   return (Array.isArray(media) ? media : [])
     .filter((m) => m && typeof m.url === 'string' && m.url)
@@ -164,49 +156,48 @@ function mapRealContent(media: PortfolioBrand['media']): ContentCard[] {
 
 export function buildBrandDetail(brand: PortfolioBrand): BrandDetailVM {
   const curated = resolveCurated(brand)
-  const real = mapRealContent(brand.media)
+  // The content grid is the brand's REAL managed reels. Empty ⇒ no fabricated cards;
+  // the modal swaps in a social CTA banner (handled in PortfolioGrid).
+  const content = mapRealContent(brand.media)
 
-  if (curated) {
-    // Real managed reels win; otherwise fall back to the synthetic peak breakdown.
-    const content = real.length ? real : buildContent(curated.cat, curated.peak)
-    return {
-      name: brand.brand,
-      logoUrl: brand.logoUrl,
-      categoryKey: curated.cat,
-      catLabel: CAT_LABEL[curated.cat],
-      type: curated.type,
-      blurb: '', // design shows none when curated content is present
-      metaCells: [
-        { label: 'Start', value: curated.start },
-        { label: 'End', value: curated.end },
-        { label: 'Deliverables', value: curated.deliv },
-        { label: 'Total views', value: fmt(curated.total), accent: true },
-      ],
-      content,
-      countLabel: `${content.length} pieces`,
-    }
-  }
+  // Header labels: curated `type`/category for the original showcase brands, else
+  // DB-derived (campaign title + category). Stats below are always live, never curated.
+  const key = curated?.cat ?? categoryKey(brand.category)
+  const type = curated?.type ?? brand.campaignTitle ?? ''
 
-  // FALLBACK — a brand not in the curated set (e.g. added later in admin): show what
-  // the DB has (aggregate metrics, if any) and the blurb. No fabricated content grid.
-  const key = categoryKey(brand.category)
-  const m = brand.metrics || {}
-  const metaCells: MetaCell[] = []
-  if (m.reach) metaCells.push({ label: 'Reach', value: m.reach })
-  if (m.views) metaCells.push({ label: 'Total views', value: m.views, accent: true })
-  if (m.engagement) metaCells.push({ label: 'Engagement', value: m.engagement })
-  const delivCount = Array.isArray(m.deliverables) ? m.deliverables.length : 0
-  if (delivCount) metaCells.push({ label: 'Deliverables', value: `${delivCount} ${delivCount === 1 ? 'piece' : 'pieces'}` })
+  // The four stats. START / END / TOTAL VIEWS read the per-brand campaign columns;
+  // DELIVERABLES is DERIVED from the count of top-content pieces. Any blank ⇒ a quiet
+  // "~" placeholder (empty:true → dimmed), never "N/A" and never a fabricated value.
+  const start = fmtDate(brand.startDate)
+  const end = fmtDate(brand.endDate)
+  const pieces = content.length
+  const tv = brand.totalViews
+
+  const metaCells: MetaCell[] = [
+    { label: 'Start', value: start || DASH, empty: !start },
+    { label: 'End', value: end || DASH, empty: !end },
+    {
+      label: 'Deliverables',
+      value: pieces ? `${pieces} ${pieces === 1 ? 'piece' : 'pieces'}` : DASH,
+      empty: pieces === 0,
+    },
+    {
+      label: 'Total views',
+      value: tv != null ? formatCount(tv) : DASH,
+      accent: tv != null,
+      empty: tv == null,
+    },
+  ]
 
   return {
     name: brand.brand,
     logoUrl: brand.logoUrl,
     categoryKey: key,
     catLabel: CAT_LABEL[key],
-    type: brand.campaignTitle || CAT_LABEL[key],
+    type: type || CAT_LABEL[key],
     blurb: brand.blurb || '',
     metaCells,
-    content: real,
-    countLabel: real.length ? `${real.length} pieces` : '',
+    content,
+    countLabel: pieces ? `${pieces} ${pieces === 1 ? 'piece' : 'pieces'}` : '',
   }
 }

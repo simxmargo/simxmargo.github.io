@@ -29,6 +29,9 @@ export interface BrandWriteInput {
   rowIndex?: '' | 1 | 2 | number | null
   sortOrder?: number
   isVisible?: boolean
+  startDate?: string | null // ISO 'YYYY-MM-DD'; '' ⇒ cleared (null)
+  endDate?: string | null // ISO 'YYYY-MM-DD'; '' ⇒ cleared (null)
+  totalViews?: string | number | null // compact ("3.4M") or raw; parsed at the boundary
 }
 
 // One reorder entry: a bare id (sort only) or { id, rowIndex } (sort + lane), exactly
@@ -92,7 +95,17 @@ function mapBody(body: Record<string, unknown>): Record<string, unknown> {
   if ('rowIndex' in body) out.row_index = coerceRowIndex(body.rowIndex)
   if ('sortOrder' in body) out.sort_order = body.sortOrder
   if ('isVisible' in body) out.is_visible = Boolean(body.isVisible)
+  // Campaign fields: empty ⇒ NULL (the modal shows a quiet "~"). Dates pass through
+  // as ISO strings; total_views accepts compact ("3.4M") or raw, parsed to a number.
+  if ('startDate' in body) out.start_date = nullableDate(body.startDate)
+  if ('endDate' in body) out.end_date = nullableDate(body.endDate)
+  if ('totalViews' in body) out.total_views = parseCompact(body.totalViews as string | number | null | undefined)
   return out
+}
+
+// Coerce a form date value to an ISO date string or null (blank ⇒ cleared column).
+function nullableDate(v: unknown): string | null {
+  return typeof v === 'string' && v.trim() ? v.trim() : null
 }
 
 // Map a snake_case portfolio_brands row → the camelCase AdminBrand the editor reads.
@@ -114,6 +127,9 @@ function mapBrand(r: any): AdminBrand {
     metrics: r.metrics ?? {},
     media: Array.isArray(r.media) ? r.media : [],
     rowIndex: r.row_index === 1 || r.row_index === 2 ? r.row_index : undefined,
+    startDate: r.start_date ?? null,
+    endDate: r.end_date ?? null,
+    totalViews: r.total_views != null ? Number(r.total_views) : null,
   }
 }
 

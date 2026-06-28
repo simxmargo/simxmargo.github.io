@@ -81,6 +81,11 @@ export interface PortfolioBrand {
   category: string
   featured: boolean
   rowIndex?: number // 1 | 2 — which marquee row this brand appears in (null ⇒ auto-split)
+  // Per-brand campaign fields shown in the brand-detail modal (manual, nullable).
+  // Unset ⇒ the modal renders a quiet "~" rather than a fabricated value.
+  startDate?: string | null // ISO date 'YYYY-MM-DD'
+  endDate?: string | null // ISO date 'YYYY-MM-DD'
+  totalViews?: number | null // raw campaign-wide view count
 }
 
 // What the public "Work with me" form submits (→ collab_inquiries).

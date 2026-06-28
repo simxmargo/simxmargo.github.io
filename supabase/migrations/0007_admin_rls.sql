@@ -44,6 +44,18 @@ drop policy if exists "admins read" on public.admins;
 create policy "admins read" on public.admins
   for select to authenticated using (public.is_admin());
 
+-- Idempotency: drop the new "admin all" policies first so re-running this migration
+-- (db:apply re-runs every file) doesn't error on already-existing policies.
+drop policy if exists "admin all" on public.public_profile;
+drop policy if exists "admin all" on public.portfolio_brands;
+drop policy if exists "admin all" on public.social_stats;
+drop policy if exists "admin all" on public.collab_inquiries;
+drop policy if exists "admin all" on public.contacts;
+drop policy if exists "admin all" on public.app_settings;
+drop policy if exists "admin all" on public.scrape_jobs;
+drop policy if exists "admin all" on public.send_queue;
+drop policy if exists "admin all" on public.suppression_list;
+
 -- ── Media-kit tables: keep public reads, replace owner-all with is_admin() ──────
 -- public_profile (single row id=1)
 drop policy if exists "owner all" on public.public_profile;
