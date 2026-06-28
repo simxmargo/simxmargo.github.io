@@ -15,6 +15,7 @@
 
 import { createClient } from 'jsr:@supabase/supabase-js@2'
 import { json, preflight } from '../_shared/http.ts'
+import { requireAdmin } from '../_shared/auth.ts'
 import { classifyEmail, normalizeDomain, sleep } from '../_shared/scrape.ts'
 
 const HUNTER = 'https://api.hunter.io/v2'
@@ -40,6 +41,11 @@ interface Target {
 Deno.serve(async (req) => {
   const pre = preflight(req)
   if (pre) return pre
+
+  // Admin-only: spends Hunter credits + writes contacts with the service-role key.
+  // Gate BEFORE the credit check so a non-admin can never make us hit the Hunter API.
+  const denied = await requireAdmin(req)
+  if (denied) return denied
 
   const url = Deno.env.get('SUPABASE_URL')
   const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')

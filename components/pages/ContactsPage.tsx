@@ -7,12 +7,14 @@ import { StatsBar } from '@/components/StatsBar'
 import { FilterBar, type Filters } from '@/components/FilterBar'
 import { ContactsTable } from '@/components/ContactsTable'
 import { ComposeDrawer } from '@/components/ComposeDrawer'
+import { ScrapeBrandsModal } from '@/components/admin/ScrapeBrandsModal'
 import type { Contact } from '@/lib/types'
 
 export function ContactsPage() {
-  const { contacts, profile, setStatus, queueDraft } = useStore()
+  const { contacts, profile, setStatus, queueDraft, hydrate } = useStore()
   const [filters, setFilters] = useState<Filters>({ search: '', status: 'all', country: 'all', minFit: 0 })
   const [drafting, setDrafting] = useState<Contact | null>(null)
+  const [scraping, setScraping] = useState(false)
 
   const countries = useMemo(
     () => Array.from(new Set(contacts.map((c) => c.country))).sort(),
@@ -38,11 +40,11 @@ export function ContactsPage() {
             Brand leads to pitch, ranked by fit. Draft an email, then review it in the queue.
           </p>
         </div>
-        {/* TODO(studio-backend): wire to the scrape + enrich Edge Function. */}
         <button
-          disabled
-          title="Backend pending — see docs/BACKEND_DESIGN.md"
-          className="btn btn-ghost is-disabled"
+          type="button"
+          onClick={() => setScraping(true)}
+          title="Find brand contacts by scraping their sites"
+          className="btn btn-ghost"
         >
           <Plus size={15} aria-hidden="true" /> Scrape new brands
         </button>
@@ -67,6 +69,13 @@ export function ContactsPage() {
           setDrafting(null)
         }}
       />
+
+      {scraping && (
+        <ScrapeBrandsModal
+          onClose={() => setScraping(false)}
+          onScraped={() => void hydrate()}
+        />
+      )}
     </>
   )
 }

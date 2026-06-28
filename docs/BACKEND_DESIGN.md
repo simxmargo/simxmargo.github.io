@@ -1,9 +1,11 @@
 # Backend design — brand-outreach-studio
 
-> Status: **design, not built.** The UI shell (Phase 1) runs against mock data.
-> This document is the blueprint for wiring the real scraper, enrichment,
-> AI scoring, and sending. It's grounded in research done 2026-06-15 (sources at
-> the end). Every external fact here can drift — re-verify before relying on it.
+> Status: **scrape → enrich → qualify is LIVE** (deployed 2026-06-28, admin-gated).
+> The Contacts "Scrape new brands" button now queues `scrape_jobs` and runs the three
+> Edge Functions; new leads flow into the live `contacts` table. Enrichment + AI
+> scoring degrade gracefully until `HUNTER_API_KEY` / `ANTHROPIC_API_KEY` are set.
+> **Still design-only: sending (§6), suppression (§7), the optional Playwright worker.**
+> Grounded in research done 2026-06-15 (sources at the end) — re-verify external facts.
 
 The guiding principle: the **frontend stays dumb** (it only reads/writes Supabase
 and triggers jobs), and all the I/O-heavy, secret-holding work happens server-side
@@ -45,12 +47,14 @@ RLS is single-owner; the service-role key (Edge Functions only) bypasses it.
 
 ---
 
-## 3. The scraper (`scrape-static` Edge Function) — ✅ built
+## 3. The scraper (`scrape-static` Edge Function) — ✅ deployed + wired
 
 Implemented in `supabase/functions/scrape-static/index.ts` with pure helpers in
 `supabase/functions/_shared/scrape.ts` (unit-checked by `_shared/scrape.test.mjs`).
-Not deployed yet (no Supabase project). Invoke one job with `POST {job_id}` (the UI
-"Scrape" button) or drain the pending queue with `POST {}` (pg_cron).
+**Deployed + admin-gated** (`_shared/auth.ts` `requireAdmin()` → `is_admin()`, before
+any fetch). Invoke one job with `POST {job_id}` (the UI "Scrape" button, via
+`lib/admin/scrapeBrands.ts`) or drain the pending queue with `POST {}` — note a cron
+drain must now present admin auth (or add a CRON_SECRET branch), see the file header.
 
 Input: a `scrape_jobs` row (brand + website). Output: rows in `contacts`.
 
@@ -76,12 +80,14 @@ areas, **never LinkedIn**. Cache results so re-runs cost nothing.
 
 ---
 
-## 4. Enrichment (`enrich` Edge Function) — Hunter.io free-first — ✅ built
+## 4. Enrichment (`enrich` Edge Function) — Hunter.io free-first — ✅ deployed
 
 Implemented in `supabase/functions/enrich/index.ts`. Invoke for specific brands
 with `POST {domains:[...]}` or auto-pick scraped-but-unenriched jobs with `POST {}`.
 Adds the `scrape_jobs.enriched_at` marker (migration `0002_enrich.sql`) so a re-run
-never re-spends a Hunter credit on a domain it already searched. Not deployed yet.
+never re-spends a Hunter credit on a domain it already searched. **Deployed +
+admin-gated.** Runs automatically after a scrape (the chain in `scrapeBrands.ts`).
+Without `HUNTER_API_KEY` it returns `{enriched:0, note}` — a no-op, never an error.
 
 Hunter's **free plan includes API access** (~50 credits/month ≈ 25 searches + 50
 verifications; no card; Domain Search capped at **10 emails/domain** on free).
@@ -118,9 +124,11 @@ Implemented (ported from the retired `brand-outreach` Python CLI's `qualify.py`)
   `app_settings`, finds up to 10 contacts with a null `fit_score`, scores each,
   and writes `fit_score` + `fit_reason` back.
 
-Cost ~fractions of a cent per lead. The code is final; it just isn't deployed
-yet (no Supabase project). When ready:
-`supabase functions deploy qualify` + `supabase secrets set ANTHROPIC_API_KEY=…`.
+Cost ~fractions of a cent per lead. **Deployed + admin-gated**, and standardized on
+`_shared/http.ts` (CORS/preflight) so the browser can invoke it. Runs after enrich in
+the scrape chain. Without `ANTHROPIC_API_KEY` it returns `{scored:0, note}` — a no-op,
+not a 500 — so the chain never hard-fails. Set the key to switch scoring on:
+`supabase secrets set ANTHROPIC_API_KEY=…`.
 
 ---
 
@@ -206,7 +214,7 @@ sends out to respect Gmail's ~60/min ceiling.
 
 | UI element | Replaces stub with |
 |---|---|
-| "Scrape new brands" button (Contacts) | insert `scrape_jobs` → `scrape-static` + `enrich` + `qualify` |
+| "Scrape new brands" button (Contacts) | ✅ DONE — `ScrapeBrandsModal` → `scrapeBrands()` → insert `scrape_jobs` → `scrape-static` + `enrich` + `qualify` |
 | Mock `contacts` in the store | a Supabase `select * from contacts` |
 | "Approve & send" (Queue) | insert `send_queue` row → `pg_cron` → `send-one` |
 | "Connect Gmail" (Settings) | the `gmail-oauth` consent flow |
@@ -218,10 +226,10 @@ sends out to respect Gmail's ~60/min ceiling.
 
 1. **Supabase project** + apply `0001_init.sql` **and `0002_enrich.sql`**; swap the
    store's mock data for a real `contacts` query (read-only first).
-2. ✅ **`scrape-static` + `enrich`** *(code complete, undeployed)* → real contacts
-   flowing in. Still TODO: wire the UI "Scrape" button to insert a `scrape_jobs`
-   row and `functions.invoke('scrape-static', {body:{job_id}})` → `enrich` → `qualify`.
-3. ✅ **`qualify`** → fit scores populated *(code complete, undeployed)*.
+2. ✅ **`scrape-static` + `enrich`** *(deployed + wired 2026-06-28)* → real contacts
+   flow in from the UI "Scrape new brands" button (`ScrapeBrandsModal` →
+   `scrapeBrands()` inserts a `scrape_jobs` row → `scrape-static` → `enrich` → `qualify`).
+3. ✅ **`qualify`** *(deployed)* → fit scores populate once `ANTHROPIC_API_KEY` is set.
 4. **Gmail OAuth + `send-one` + `pg_cron`** → real sending with the daily cap.
 5. **Reply/bounce handling** → suppression + flip `contacts.status` to `replied`.
 6. *(optional)* Playwright worker for `needs_browser` sites.

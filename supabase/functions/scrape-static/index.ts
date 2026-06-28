@@ -8,6 +8,10 @@
 // Invoke one job (UI "Scrape" button):  POST { "job_id": "<uuid>" }
 // Or drain the pending queue (pg_cron):  POST {}   (no body)
 //
+// Auth: admin-only (is_admin() gate). The UI path carries the signed-in admin's JWT.
+// A future pg_cron drain must present admin credentials (or add a CRON_SECRET branch
+// here) — an unauthenticated cron tick will now 401, by design.
+//
 // Deploy:  supabase functions deploy scrape-static
 // Env (auto-injected by Supabase): SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY
 //
@@ -15,6 +19,7 @@
 
 import { createClient } from 'jsr:@supabase/supabase-js@2'
 import { json, preflight } from '../_shared/http.ts'
+import { requireAdmin } from '../_shared/auth.ts'
 import {
   CONTACT_PATHS,
   classifyEmail,
@@ -53,6 +58,11 @@ async function fetchText(url: string): Promise<string | null> {
 Deno.serve(async (req) => {
   const pre = preflight(req)
   if (pre) return pre
+
+  // Admin-only: the static SPA has no server, so this function runs with the
+  // service-role key below — gate it on is_admin() before any scraping/DB write.
+  const denied = await requireAdmin(req)
+  if (denied) return denied
 
   const url = Deno.env.get('SUPABASE_URL')
   const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')

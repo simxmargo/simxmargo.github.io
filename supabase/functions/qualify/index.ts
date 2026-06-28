@@ -2,30 +2,47 @@
 //
 // Reads the creator profile from app_settings, finds contacts with a null
 // fit_score, scores each with the ported Anthropic logic, and writes the result
-// back. Driven on-demand (from the UI) or on a slow pg_cron tick. Not deployed
-// yet — this is the real implementation, ready for when the backend is wired.
+// back. Driven on-demand (from the UI "Scrape new brands" flow) or a slow pg_cron
+// tick.
+//
+// Auth: admin-only (is_admin() gate) — it spends Anthropic credits + writes with the
+// service-role key. The UI path carries the signed-in admin's JWT.
+//
+// Invoke:  POST {}   (scores the next batch of unscored contacts)
 //
 // Deploy:  supabase functions deploy qualify
 // Secret:  supabase secrets set ANTHROPIC_API_KEY=sk-ant-...
+//          (absent → graceful no-op, so the post-scrape chain never hard-fails)
 //
 // Reuses the scoring logic ported from the brand-outreach Python CLI.
 
 import { createClient } from 'jsr:@supabase/supabase-js@2'
+import { json, preflight } from '../_shared/http.ts'
+import { requireAdmin } from '../_shared/auth.ts'
 import { scoreBrandFit, type ProfileInput } from '../_shared/qualify.ts'
 
 const BATCH = 10 // score up to N per invocation (keeps within Edge limits + cost)
 
-Deno.serve(async () => {
+Deno.serve(async (req) => {
+  const pre = preflight(req)
+  if (pre) return pre
+
+  const denied = await requireAdmin(req)
+  if (denied) return denied
+
   const apiKey = Deno.env.get('ANTHROPIC_API_KEY')
   const supabaseUrl = Deno.env.get('SUPABASE_URL')
   const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')
 
-  if (!apiKey || !supabaseUrl || !serviceKey) {
-    return Response.json({ error: 'Missing ANTHROPIC_API_KEY / Supabase env' }, { status: 500 })
-  }
+  if (!supabaseUrl || !serviceKey) return json({ error: 'Missing Supabase env' }, 500)
+  // Scoring is optional — a missing key shouldn't fail the post-scrape chain. Degrade
+  // gracefully (same shape as enrich), so the UI just shows "scoring unavailable".
+  if (!apiKey) return json({ scored: 0, note: 'ANTHROPIC_API_KEY not set — skipping scoring' })
 
   // Service-role client bypasses RLS — Edge Functions only, never the browser.
-  const supabase = createClient(supabaseUrl, serviceKey)
+  const supabase = createClient(supabaseUrl, serviceKey, {
+    auth: { persistSession: false, autoRefreshToken: false },
+  })
 
   // Creator profile drives the score.
   const { data: settings } = await supabase
@@ -42,7 +59,7 @@ Deno.serve(async () => {
     .is('fit_score', null)
     .limit(BATCH)
 
-  if (error) return Response.json({ error: error.message }, { status: 500 })
+  if (error) return json({ error: error.message }, 500)
 
   let scored = 0
   const failures: { id: string; error: string }[] = []
@@ -62,5 +79,5 @@ Deno.serve(async () => {
     }
   }
 
-  return Response.json({ scored, remaining_in_batch: (contacts?.length ?? 0) - scored, failures })
+  return json({ scored, remaining_in_batch: (contacts?.length ?? 0) - scored, failures })
 })

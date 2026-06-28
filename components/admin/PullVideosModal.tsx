@@ -5,6 +5,7 @@ import { AlertTriangle, X, Download, Search, Loader2, Check } from 'lucide-react
 import { useDialog } from '@/lib/admin/useDialog'
 import { supabaseBrowser } from '@/lib/supabase/browser'
 import { updateBrand, type AdminBrand } from '@/lib/admin/resources/brands'
+import { fnErrorMessage } from '@/lib/admin/fnError'
 import { formatCount, type BrandMedia } from '@/lib/mediakit-types'
 
 // Bulk-supply tool: pull a creator's recent TikTok/IG posts by handle (via the
@@ -34,21 +35,6 @@ interface ReviewRow extends PulledVideo {
 }
 
 const UNMATCHED = '' as const
-
-// Read the function's JSON `{ error }` body off a failed invoke (the message lives on
-// the FunctionsHttpError's Response in `.context`); fall back to the generic message.
-async function fnErrorMessage(error: unknown): Promise<string> {
-  const ctx = (error as { context?: unknown })?.context
-  if (ctx instanceof Response) {
-    try {
-      const j = await ctx.clone().json()
-      if (j && typeof j.error === 'string') return j.error
-    } catch {
-      /* not a JSON body */
-    }
-  }
-  return error instanceof Error ? error.message : 'Could not pull videos.'
-}
 
 export function PullVideosModal({
   brands,
@@ -111,7 +97,7 @@ export function PullVideosModal({
         body: { platform, handle: h },
       })
       if (invokeErr) {
-        setError(await fnErrorMessage(invokeErr))
+        setError(await fnErrorMessage(invokeErr, 'Could not pull videos.'))
         return
       }
       const vids: PulledVideo[] = Array.isArray(data?.videos) ? data.videos : []
