@@ -28,10 +28,11 @@ export const mockProfile: PublicProfile = {
     { deliverable: 'UGC bundle (3 videos)', price: 'from $1,800', note: 'no posting, brand-owned' },
     { deliverable: 'Ambassadorship (monthly)', price: "let's talk", note: 'ongoing partnership' },
   ],
+  showRates: true,
   pressLogos: [],
   seo: {
     title: 'simxmargo — Media Kit',
-    description: 'Fashion & beauty creator · 4.4M followers across TikTok, Instagram & Facebook. Collab with simxmargo.',
+    description: 'Fashion & beauty creator across TikTok, Instagram & Facebook. Collab with simxmargo.',
   },
   isPublished: true,
 }

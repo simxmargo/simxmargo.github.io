@@ -31,6 +31,7 @@ export interface PublicProfile {
   mediaKitUrl: string
   totalFollowers: number | null // null ⇒ compute SUM(socialStats.followers)
   rateCard: RateCardItem[]
+  showRates: boolean // false ⇒ hide the public Rates section (+ its nav link)
   pressLogos: PressLogo[]
   seo: { title?: string; description?: string; ogImageUrl?: string }
   // Editable from the admin Theme editor; applied as CSS vars on the public page.

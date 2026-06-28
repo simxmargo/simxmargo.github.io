@@ -6,6 +6,10 @@ import { submitCollab } from '@/lib/mediakit/collab'
 
 const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/
 
+// Shown in the price column when the admin turns OFF "Show prices" (profile.showRates):
+// the rates still list, but each price becomes a short invite to enquire instead.
+const PRICE_HIDDEN_LABEL = "Let's talk"
+
 // Single client island owning BOTH the Rates (#rates) and Collaborate (#contact)
 // sections plus the shared "selected deliverable" state: clicking Select on a
 // rate row pre-fills the contact form's Package select and smooth-scrolls to
@@ -80,7 +84,8 @@ export function RateAndContact({ profile }: { profile: PublicProfile }) {
 
   return (
     <>
-      {/* Rates */}
+      {/* Rates always show. When the admin turns off "Show prices" (profile.showRates),
+          each price is replaced with a short invite to enquire — the deliverables stay. */}
       <section id="rates" className="rates">
         <div className="wrap">
           <div className="sec-head">
@@ -94,7 +99,9 @@ export function RateAndContact({ profile }: { profile: PublicProfile }) {
               <div key={i} className="rate-row reveal">
                 <div className="rate-title display">{r.deliverable}</div>
                 <div className="rate-meta">{r.note}</div>
-                <div className="rate-price display">{r.price}</div>
+                <div className="rate-price display">
+                  {profile.showRates === false ? PRICE_HIDDEN_LABEL : r.price}
+                </div>
                 <button
                   type="button"
                   className="btn btn-ghost rate-btn"

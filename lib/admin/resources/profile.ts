@@ -63,6 +63,7 @@ function mapProfile(r: any): Omit<ProfileReadResult, 'metrics' | 'platforms'> {
     heroImageUrl: r.hero_image_url ?? '',
     ogImageUrl: seo.og_image_url ?? '',
     rateCard: Array.isArray(r.rate_card) ? r.rate_card : [],
+    showRates: r.show_rates !== false, // default true (column added in 0009)
     pressLogos: Array.isArray(r.press_logos) ? r.press_logos : [],
     seo,
     theme: r.theme ?? {},
@@ -97,6 +98,7 @@ export interface ProfileReadResult {
   heroImageUrl: string
   ogImageUrl: string
   rateCard: RateCardItem[]
+  showRates: boolean
   pressLogos: PressLogo[]
   seo: PublicProfile['seo']
   theme: NonNullable<PublicProfile['theme']>
@@ -146,6 +148,7 @@ export interface ProfileSavePatch {
   mediaKitUrl?: string
   totalFollowers?: number | null
   rateCard?: RateCardItem[]
+  showRates?: boolean
   pressLogos?: PressLogo[]
   theme?: PublicProfile['theme']
   isPublished?: boolean
@@ -171,7 +174,7 @@ export async function saveProfile(patch: ProfileSavePatch): Promise<void> {
     avatarUrl: 'avatar_url', heroImageUrl: 'hero_image_url', location: 'location', niche: 'niche',
     audience: 'audience', replyToEmail: 'reply_to_email', mailingAddress: 'mailing_address',
     mediaKitUrl: 'media_kit_url', totalFollowers: 'total_followers', rateCard: 'rate_card',
-    pressLogos: 'press_logos', theme: 'theme', isPublished: 'is_published',
+    showRates: 'show_rates', pressLogos: 'press_logos', theme: 'theme', isPublished: 'is_published',
   }
   for (const [camel, snake] of Object.entries(map)) {
     if (camel in b) updates[snake] = b[camel]

@@ -44,6 +44,7 @@ interface ProfileForm {
   avatarUrl: string
   ogImageUrl: string
   rateCard: RateCardItem[]
+  showRates: boolean
   isPublished: boolean
 }
 
@@ -61,6 +62,7 @@ const EMPTY_FORM: ProfileForm = {
   avatarUrl: '',
   ogImageUrl: '',
   rateCard: [],
+  showRates: true,
   isPublished: false,
 }
 
@@ -80,6 +82,7 @@ function toForm(p: ProfileResponse | null | undefined): ProfileForm {
     avatarUrl: p.avatarUrl ?? '',
     ogImageUrl: (p as { ogImageUrl?: string }).ogImageUrl ?? p.seo?.ogImageUrl ?? '',
     rateCard: Array.isArray(p.rateCard) ? p.rateCard : [],
+    showRates: (p as { showRates?: boolean }).showRates !== false, // default true
     isPublished: Boolean(p.isPublished),
   }
 }
@@ -158,6 +161,7 @@ export function ProfileEditor() {
         price: r.price,
         ...(r.note?.trim() ? { note: r.note } : {}),
       })),
+      showRates: form.showRates,
       isPublished: form.isPublished,
     }
     try {
@@ -465,13 +469,28 @@ export function ProfileEditor() {
 
         {/* Rate card */}
         <section className="card">
-          <div className="card-head">
-            <span className="ico-badge">
-              <Tag size={18} aria-hidden="true" />
-            </span>
-            <h2 className="card-title">Rate card</h2>
+          <div className="flex items-start justify-between gap-4">
+            <div className="card-head" style={{ marginBottom: 0 }}>
+              <span className="ico-badge">
+                <Tag size={18} aria-hidden="true" />
+              </span>
+              <div>
+                <h2 className="card-title">Rate card</h2>
+                <p className="card-sub">When off, prices are hidden — each shows &ldquo;Let&rsquo;s talk&rdquo; to invite an enquiry (rates stay saved).</p>
+              </div>
+            </div>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={form.showRates}
+              aria-label="Show prices on the public media kit"
+              onClick={() => update('showRates', !form.showRates)}
+              className="switch"
+            >
+              <span className="switch-knob" />
+            </button>
           </div>
-          <div className="flex items-center justify-end">
+          <div className="flex items-center justify-end" style={{ marginTop: 12 }}>
             <button type="button" onClick={addRow} className="btn btn-ghost btn-sm">
               <Plus size={14} aria-hidden="true" /> Add rate
             </button>
