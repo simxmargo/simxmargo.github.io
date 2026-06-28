@@ -128,9 +128,9 @@ export function SocialStatsEditor() {
             Numbers shown on your public kit. Auto-fetch pulls TikTok &amp; Instagram; the rest is by hand.
           </p>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="head-aside">
           {ready && hasFetchable && (
-            <div className="flex flex-col items-end gap-1">
+            <div className="head-fetch">
               <button
                 type="button"
                 className="btn btn-ghost"
@@ -139,40 +139,19 @@ export function SocialStatsEditor() {
               >
                 <RefreshCw size={15} aria-hidden="true" /> Auto-fetch
               </button>
-              <span style={{ fontSize: 11.5, color: 'var(--faint)' }}>
+              <p className="head-note">
                 Auto-fetch is temporarily off — type the follower counts and Save.
-              </span>
+              </p>
             </div>
           )}
           {ready && rows.length > 0 && (
-            <div
-              style={{
-                flex: 'none',
-                textAlign: 'right',
-                background: 'var(--panel)',
-                border: '1px solid var(--line)',
-                borderRadius: 14,
-                padding: '14px 18px',
-              }}
-            >
+            <div className="reach-card">
               <div className="flabel">Total reach</div>
-              <div
-                className="display"
-                style={{
-                  marginTop: 4,
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'flex-end',
-                  gap: 7,
-                  fontSize: 24,
-                  fontWeight: 600,
-                  color: 'var(--ink)',
-                }}
-              >
+              <div className="display reach-val">
                 <BarChart3 size={17} aria-hidden="true" style={{ color: 'var(--accent)' }} />
                 {formatCount(totalReach)}
               </div>
-              <div style={{ marginTop: 2, fontSize: 11.5, color: 'var(--faint)' }}>
+              <div className="reach-sub">
                 {totalReach.toLocaleString()} followers · visible only
               </div>
             </div>

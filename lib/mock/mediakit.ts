@@ -7,7 +7,7 @@ import type { MediaKitData, PortfolioBrand, PublicProfile, SocialStat } from '@/
 // renders a styled monogram fallback (no external image deps in the shell).
 
 export const mockProfile: PublicProfile = {
-  displayName: 'sim x margo',
+  displayName: 'simxmargo',
   handle: '@simxmargo',
   tagline: 'Fashion, beauty & everyday inspiration — for brands that want to feel real.',
   bioMd:
@@ -30,8 +30,8 @@ export const mockProfile: PublicProfile = {
   ],
   pressLogos: [],
   seo: {
-    title: 'sim x margo — Media Kit',
-    description: 'Fashion & beauty creator · 4.4M followers across TikTok, Instagram & Facebook. Collab with sim x margo.',
+    title: 'simxmargo — Media Kit',
+    description: 'Fashion & beauty creator · 4.4M followers across TikTok, Instagram & Facebook. Collab with simxmargo.',
   },
   isPublished: true,
 }

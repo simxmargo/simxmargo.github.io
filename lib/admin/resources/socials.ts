@@ -1,7 +1,7 @@
 import { supabaseBrowser } from '@/lib/supabase/browser'
 import type { Platform, SocialStat } from '@/lib/mediakit-types'
 
-// Browser-only data layer for the "sim x margo" social_stats table. This replicates
+// Browser-only data layer for the "simxmargo" social_stats table. This replicates
 // the old app/api/admin/socials route handlers EXACTLY, but talks to Supabase
 // directly through the authenticated admin session (supabaseBrowser). RLS
 // (`is_admin()`) is the security boundary; there is no service-role key here.

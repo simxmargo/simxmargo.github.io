@@ -2,7 +2,6 @@
 
 import { create } from 'zustand'
 import type { Contact, ContactStatus, CreatorProfile, QueuedEmail } from './types'
-import { mockContacts } from './mock/contacts'
 import { buildDraft } from './emailTemplate'
 import { readContacts, updateContact } from './admin/resources/contacts'
 import { readSettings } from './admin/resources/settings'
@@ -10,7 +9,7 @@ import { readSettings } from './admin/resources/settings'
 // Placeholder identity shown for the instant first paint, before hydrate() pulls
 // the real profile from /api/admin/settings (public_profile + derived metrics).
 const defaultProfile: CreatorProfile = {
-  name: 'sim x margo',
+  name: 'simxmargo',
   handle: '@simxmargo',
   niche: 'Fashion, beauty & lifestyle',
   followers: '—',
@@ -63,15 +62,14 @@ interface StudioState {
 }
 
 export const useStore = create<StudioState>((set, get) => ({
-  // Mock paints instantly; hydrate() swaps in live data from the service-role admin
-  // routes (contacts + app_settings have NO anon RLS policy, so the browser must
-  // go through /api/admin/* — the anon client could never read them).
-  contacts: mockContacts,
+  // Starts EMPTY; hydrate() loads live leads directly from Supabase (authed admin
+  // session + is_admin() RLS). No mock seed — the studio only ever shows real contacts.
+  contacts: [],
   profile: defaultProfile,
   queue: [],
   dailyCap: 20,
-  sentToday: mockContacts.filter((c) => c.status === 'sent').length,
-  source: 'mock',
+  sentToday: 0,
+  source: 'live',
   loading: false,
 
   hydrate: async () => {

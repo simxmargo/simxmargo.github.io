@@ -16,7 +16,7 @@ update public_profile set
     {"deliverable":"UGC bundle (3 videos)","price":"from $1,800","note":"no posting, brand-owned"},
     {"deliverable":"Ambassadorship (monthly)","price":"let''s talk","note":"ongoing partnership"}
   ]'::jsonb,
-  seo = '{"title":"sim x margo — Media Kit","description":"Fashion & beauty creator · 4.4M followers across TikTok, Instagram & Facebook. Collaborate with sim x margo."}'::jsonb,
+  seo = '{"title":"simxmargo — Media Kit","description":"Fashion & beauty creator · 4.4M followers across TikTok, Instagram & Facebook. Collaborate with simxmargo."}'::jsonb,
   is_published = true,
   updated_at = now()
 where id = 1;

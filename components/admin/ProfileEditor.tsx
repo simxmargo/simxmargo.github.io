@@ -252,7 +252,7 @@ export function ProfileEditor() {
                 value={form.displayName}
                 onChange={(e) => update('displayName', e.target.value)}
                 className="input"
-                placeholder="sim x margo"
+                placeholder="simxmargo"
               />
             </div>
             <div className="field">

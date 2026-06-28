@@ -1,4 +1,4 @@
--- DEV SEED: the real "sim x margo" brand partners (mirrors the live beacons grid).
+-- DEV SEED: the real "simxmargo" brand partners (mirrors the live beacons grid).
 -- NOT a migration — kept out of migrations/ so it never runs on prod via db:apply.
 -- Re-runnable: it REPLACES the whole portfolio_brands set with this canonical list,
 -- so running it again converges to exactly these 17 rows (idempotent by design).

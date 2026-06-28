@@ -180,7 +180,7 @@ create table if not exists public_profile (
   updated_at      timestamptz not null default now()
 );
 insert into public_profile (id, display_name, niche, location)
-  values (1, 'sim x margo', 'fashion / lifestyle', 'Philippines')
+  values (1, 'simxmargo', 'fashion / lifestyle', 'Philippines')
   on conflict (id) do nothing;
 
 -- ---------------------------------------------------------------------------

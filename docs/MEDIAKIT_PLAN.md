@@ -6,7 +6,7 @@
 
 `simxmargo` unifies two surfaces that already exist (or partly exist) as separate concerns into a single Next.js 16 App Router deployment on one domain (`https://simxmargo.com`):
 
-1. **The public mediakit** — a dark, editorial, SEO-optimized one-pager for the `sim x margo` creator brand (4.4M total reach). Fully crawlable, server-rendered, no auth, read-only against published data. This is what cold-pitched brands land on.
+1. **The public mediakit** — a dark, editorial, SEO-optimized one-pager for the `simxmargo` creator brand (4.4M total reach). Fully crawlable, server-rendered, no auth, read-only against published data. This is what cold-pitched brands land on.
 2. **The private outreach studio** — the existing Vite SPA (contacts scraping/scoring, send queue, settings) ported into the same app under a passphrase-gated `/admin`, plus NEW mediakit-management screens (profile, portfolio, social stats, inquiries inbox).
 
 The two surfaces are deliberately coupled at the **data and product** level (an inbound `collab_inquiry` can be promoted to an outreach `contact`; a closed outreach `contact` can be promoted to a public `portfolio_brand` case study) but strictly **separated at the security and theme** level (distinct visual identity, distinct trust boundary).
@@ -83,7 +83,7 @@ All new tables follow the existing conventions: the single-row config pattern mi
 
 ```sql
 id              int primary key default 1 check (id = 1)   -- single-row, app_settings pattern
-display_name    text not null default ''                   -- 'sim x margo'
+display_name    text not null default ''                   -- 'simxmargo'
 tagline         text default ''                            -- editorial subhead
 bio_md          text default ''                            -- About section, markdown
 avatar_url      text default ''                            -- portrait/hero (Storage public URL)
