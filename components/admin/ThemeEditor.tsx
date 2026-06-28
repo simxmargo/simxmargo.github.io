@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { CheckCircle2, AlertTriangle, RotateCcw, Palette, Eye } from 'lucide-react'
-import { adminFetch } from '@/lib/adminClient'
+import { saveProfile } from '@/lib/admin/resources/profile'
 import { useAdminResource, adminKeys, AdminFetchError } from '@/lib/admin/queries'
 import type { PublicProfile } from '@/lib/mediakit-types'
 import { FormSkeleton } from '@/components/admin/Skeleton'
@@ -40,24 +40,12 @@ export function ThemeEditor() {
     // (case-insensitive), capped at 5. Persisted in the theme jsonb so it survives reloads.
     const nextRecent = [accent, ...recentAccents.filter((c) => c.toLowerCase() !== accent.toLowerCase())].slice(0, 5)
     try {
-      const res = await adminFetch('/api/admin/profile', {
-        method: 'PUT',
-        body: JSON.stringify({ theme: { accent, tileTheme, recentAccents: nextRecent } }),
-      })
-      if (res.status === 503) {
-        setSave('config-missing')
-        return
-      }
-      if (!res.ok) {
-        setErr(`Save failed (${res.status}).`)
-        setSave('error')
-        return
-      }
+      await saveProfile({ theme: { accent, tileTheme, recentAccents: nextRecent } })
       setRecentAccents(nextRecent)
       setSave('saved')
       void qc.invalidateQueries({ queryKey: adminKeys.profile })
-    } catch {
-      setErr('Couldn’t reach the server. Try again.')
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'Couldn’t reach the server. Try again.')
       setSave('error')
     }
   }

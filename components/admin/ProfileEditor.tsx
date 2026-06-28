@@ -14,7 +14,7 @@ import {
   Mail,
 } from 'lucide-react'
 import { useQueryClient } from '@tanstack/react-query'
-import { adminFetch } from '@/lib/adminClient'
+import { saveProfile } from '@/lib/admin/resources/profile'
 import { useAdminResource, adminKeys, type AdminFetchError } from '@/lib/admin/queries'
 import { ImageField } from '@/components/admin/ImageField'
 import { FormSkeleton } from '@/components/admin/Skeleton'
@@ -161,25 +161,13 @@ export function ProfileEditor() {
       isPublished: form.isPublished,
     }
     try {
-      const res = await adminFetch('/api/admin/profile', {
-        method: 'PUT',
-        body: JSON.stringify(payload),
-      })
-      if (res.status === 503) {
-        setSave('config-missing')
-        return
-      }
-      if (!res.ok) {
-        setSaveError(`Save failed (${res.status}).`)
-        setSave('error')
-        return
-      }
+      await saveProfile(payload)
       setSave('saved')
       // Refresh the shared cache so ThemeEditor + any other reader (and the next
       // visit to this tab) see the saved values.
       void qc.invalidateQueries({ queryKey: adminKeys.profile })
-    } catch {
-      setSaveError('Couldn’t reach the server. Try again.')
+    } catch (e) {
+      setSaveError(e instanceof Error ? e.message : 'Couldn’t reach the server. Try again.')
       setSave('error')
     }
   }

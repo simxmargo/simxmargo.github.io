@@ -15,7 +15,7 @@ import {
   CheckCircle2,
 } from 'lucide-react'
 import { useQueryClient } from '@tanstack/react-query'
-import { adminFetch } from '@/lib/adminClient'
+import { updateInquiry } from '@/lib/admin/resources/inquiries'
 import { useAdminResource, adminKeys, AdminFetchError } from '@/lib/admin/queries'
 import { ListSkeleton } from '@/components/admin/Skeleton'
 
@@ -117,22 +117,8 @@ export function InquiriesInbox() {
     setSaveError(null)
 
     try {
-      const res = await adminFetch('/api/admin/inquiries', {
-        method: 'PATCH',
-        body: JSON.stringify({ id, status }),
-      })
-      if (res.status === 503) {
-        setSaveBlocked(true)
-        // Roll back the optimistic change — the write did not land.
-        if (prev) setInquiries((list) => list.map((q) => (q.id === id ? { ...q, status: prev } : q)))
-        return
-      }
-      if (!res.ok) {
-        const payload = (await res.json().catch(() => ({}))) as { error?: string }
-        setSaveError(payload.error ?? `Could not save (${res.status}).`)
-        if (prev) setInquiries((list) => list.map((q) => (q.id === id ? { ...q, status: prev } : q)))
-        return
-      }
+      // Direct Supabase write through the authenticated admin session (RLS-gated).
+      await updateInquiry(id, { status })
       setSavedId(id)
       window.setTimeout(() => {
         setSavedId((cur) => (cur === id ? null : cur))
@@ -140,7 +126,14 @@ export function InquiriesInbox() {
       // Reconcile the shared cache with the server after a successful write.
       void qc.invalidateQueries({ queryKey: adminKeys.inquiries })
     } catch (e) {
-      setSaveError((e as Error).message || 'Could not reach the server.')
+      const msg = (e as Error).message
+      // supabaseBrowser is null when env isn't set → keep the calm "blocked" banner.
+      if (msg === 'Studio is not configured.') {
+        setSaveBlocked(true)
+      } else {
+        setSaveError(msg || 'Could not reach the server.')
+      }
+      // Roll back the optimistic change — the write did not land.
       if (prev) setInquiries((list) => list.map((q) => (q.id === id ? { ...q, status: prev } : q)))
     } finally {
       setSavingId((cur) => (cur === id ? null : cur))

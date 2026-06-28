@@ -1,13 +1,14 @@
-import { requireAdmin } from '@/lib/requireAdmin'
-import { getSupabaseAdmin, getAdminReadClient } from '@/lib/supabase/admin'
+import { supabaseBrowser } from '@/lib/supabase/browser'
 import { formatCount } from '@/lib/mediakit-types'
+import type { PublicProfile, RateCardItem, PressLogo } from '@/lib/mediakit-types'
 
-// Admin API for the single public_profile row (id=1) — the full creator identity:
-// media-kit fields + outreach fields (reply-to / mailing address) + read-only reach
-// metrics derived from social_stats. The Profile tab owns ALL of this now; Settings
-// is app-config only (favicon + daily cap). requireAdmin gates BOTH methods.
-export const runtime = 'nodejs'
-export const dynamic = 'force-dynamic'
+// Browser-only data layer for the single public_profile row (id=1) — the full
+// creator identity (media-kit fields + outreach fields + read-only reach metrics).
+// This replicates the old app/api/admin/profile route handler EXACTLY, but talks
+// to Supabase directly through the authenticated admin session (supabaseBrowser).
+// RLS (`is_admin()`) is the security boundary; there is no service-role key here.
+//
+// The `profile` row is shared by BOTH ProfileEditor and ThemeEditor.
 
 const PLATFORM_LABEL: Record<string, string> = {
   tiktok: 'TikTok', instagram: 'Instagram', facebook: 'Facebook',
@@ -42,10 +43,10 @@ function deriveMetrics(socials: any[]) {
   }
 }
 
-// Map a snake_case public_profile row → the camelCase shape ProfileEditor reads
-// directly off res.json() (NOT wrapped in { data }). Mirrors lib/mediakit/data.ts.
+// Map a snake_case public_profile row → the camelCase shape the editors read.
+// ogImageUrl is surfaced at the top level (it lives inside the seo jsonb).
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-function mapProfile(r: any) {
+function mapProfile(r: any): Omit<ProfileReadResult, 'metrics' | 'platforms'> {
   const seo = r.seo ?? {}
   return {
     displayName: r.display_name ?? '',
@@ -70,51 +71,99 @@ function mapProfile(r: any) {
   }
 }
 
-export async function GET(req: Request) {
-  const denied = requireAdmin(req)
-  if (denied) return denied
+// Read-only reach metrics shown (never written back) by ProfileEditor.
+export interface ProfileMetrics {
+  followers: string
+  avgViews: string
+  engagement: string
+}
 
-  const sb = getAdminReadClient()
+// The shape readProfile returns — the camelCase profile (mirrors PublicProfile,
+// plus the top-level ogImageUrl pulled out of seo) + the derived read-only
+// metrics/platforms. Structurally assignable to `Partial<PublicProfile>`, which is
+// what the editors type their reads as.
+export interface ProfileReadResult {
+  displayName: string
+  handle: string
+  tagline: string
+  niche: string
+  location: string
+  audience: string
+  replyToEmail: string
+  mailingAddress: string
+  mediaKitUrl: string
+  bioMd: string
+  avatarUrl: string
+  heroImageUrl: string
+  ogImageUrl: string
+  rateCard: RateCardItem[]
+  pressLogos: PressLogo[]
+  seo: PublicProfile['seo']
+  theme: NonNullable<PublicProfile['theme']>
+  totalFollowers: number | null
+  isPublished: boolean
+  metrics: ProfileMetrics
+  platforms: string[]
+}
+
+// Replicates GET /api/admin/profile: read public_profile (id=1) + social_stats,
+// map snake_case → camelCase, and derive read-only reach metrics. Returns null
+// when the row doesn't exist (matching the route's `Response.json(null)`).
+export async function readProfile(): Promise<ProfileReadResult | null> {
+  const sb = supabaseBrowser
+  if (!sb) throw new Error('Studio is not configured.')
+
   const [profileRes, socialsRes] = await Promise.all([
     sb.from('public_profile').select('*').eq('id', 1).maybeSingle(),
     sb.from('social_stats').select('platform, followers, avg_views, engagement_rate, is_visible'),
   ])
-  if (profileRes.error) return Response.json({ error: profileRes.error.message }, { status: 500 })
-  if (!profileRes.data) return Response.json(null)
+  if (profileRes.error) throw new Error(profileRes.error.message)
+  if (!profileRes.data) return null
 
   const m = deriveMetrics(socialsRes.data ?? [])
-  // Profile read = the camelCase profile + derived read-only metrics (shown by ProfileEditor).
-  return Response.json({
+  return {
     ...mapProfile(profileRes.data),
     metrics: { followers: m.followers, avgViews: m.avgViews, engagement: m.engagement },
     platforms: m.platforms,
-  })
+  }
 }
 
-export async function PUT(req: Request) {
-  const denied = requireAdmin(req)
-  if (denied) return denied
+// Whitelisted camelCase patch accepted by saveProfile (mirrors the route's PUT map).
+// Only keys present on the patch are written, so saving is always a partial update.
+// ogImageUrl is merged into the seo jsonb; `seo` is a fallback for whole-blob callers.
+export interface ProfileSavePatch {
+  displayName?: string
+  handle?: string
+  tagline?: string
+  bioMd?: string
+  avatarUrl?: string
+  heroImageUrl?: string
+  location?: string
+  niche?: string
+  audience?: string
+  replyToEmail?: string
+  mailingAddress?: string
+  mediaKitUrl?: string
+  totalFollowers?: number | null
+  rateCard?: RateCardItem[]
+  pressLogos?: PressLogo[]
+  theme?: PublicProfile['theme']
+  isPublished?: boolean
+  ogImageUrl?: string
+  seo?: PublicProfile['seo']
+}
 
-  let sb
-  try {
-    sb = getSupabaseAdmin()
-  } catch (e) {
-    return Response.json({ error: String((e as Error).message) }, { status: 503 })
-  }
+// Replicates PUT /api/admin/profile: whitelist camelCase → snake_case columns,
+// merge ogImageUrl into the seo jsonb, then update public_profile id=1. Throws on
+// error (RLS `is_admin()` gates the write). No-op fields are never sent.
+export async function saveProfile(patch: ProfileSavePatch): Promise<void> {
+  const sb = supabaseBrowser
+  if (!sb) throw new Error('Studio is not configured.')
 
-  let body: unknown
-  try {
-    body = await req.json()
-  } catch {
-    return Response.json({ error: 'Invalid JSON body' }, { status: 400 })
-  }
-  if (typeof body !== 'object' || body === null || Array.isArray(body)) {
-    return Response.json({ error: 'Body must be a JSON object' }, { status: 400 })
-  }
-  const b = body as Record<string, unknown>
+  const b = patch as Record<string, unknown>
 
   // Whitelist client camelCase fields → snake_case columns. Only keys present in
-  // the body are mapped, so PUT is a partial update. Never trust the client to
+  // the patch are mapped, so this is a partial update. Never trust the client to
   // name columns directly.
   const updates: Record<string, unknown> = {}
   const map: Record<string, string> = {
@@ -139,16 +188,10 @@ export async function PUT(req: Request) {
   }
 
   if (Object.keys(updates).length === 0) {
-    return Response.json({ error: 'No updatable fields provided' }, { status: 400 })
+    throw new Error('No updatable fields provided')
   }
   updates.updated_at = new Date().toISOString()
 
-  const { data, error } = await sb
-    .from('public_profile')
-    .update(updates)
-    .eq('id', 1)
-    .select('*')
-    .maybeSingle()
-  if (error) return Response.json({ error: error.message }, { status: 500 })
-  return Response.json({ data })
+  const { error } = await sb.from('public_profile').update(updates).eq('id', 1)
+  if (error) throw new Error(error.message)
 }

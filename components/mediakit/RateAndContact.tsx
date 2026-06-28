@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from 'react'
 import type { CollabInquiryInput, PublicProfile } from '@/lib/mediakit-types'
+import { submitCollab } from '@/lib/mediakit/collab'
 
 const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/
 
@@ -73,17 +74,8 @@ export function RateAndContact({ profile }: { profile: PublicProfile }) {
       deliverables: deliverable ? [deliverable] : [],
       message: message.trim(),
     }
-    try {
-      const res = await fetch(process.env.NEXT_PUBLIC_COLLAB_ENDPOINT || '/api/collab', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(payload),
-      })
-      if (res.ok) setStatus('success')
-      else setStatus('error')
-    } catch {
-      setStatus('error')
-    }
+    const ok = await submitCollab(payload)
+    setStatus(ok ? 'success' : 'error')
   }
 
   return (

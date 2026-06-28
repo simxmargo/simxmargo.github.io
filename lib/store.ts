@@ -4,7 +4,8 @@ import { create } from 'zustand'
 import type { Contact, ContactStatus, CreatorProfile, QueuedEmail } from './types'
 import { mockContacts } from './mock/contacts'
 import { buildDraft } from './emailTemplate'
-import { adminFetch } from './adminClient'
+import { readContacts, updateContact } from './admin/resources/contacts'
+import { readSettings } from './admin/resources/settings'
 
 // Placeholder identity shown for the instant first paint, before hydrate() pulls
 // the real profile from /api/admin/settings (public_profile + derived metrics).
@@ -76,14 +77,12 @@ export const useStore = create<StudioState>((set, get) => ({
   hydrate: async () => {
     set({ loading: true })
     try {
-      const [contactsRes, settingsRes] = await Promise.all([
-        adminFetch('/api/admin/contacts'),
-        adminFetch('/api/admin/settings'),
+      // contacts is the critical path (rejection ⇒ stay on mock); settings is
+      // best-effort (null on failure), mirroring the old `settingsRes.ok ? … : null`.
+      const [contacts, settings] = await Promise.all([
+        readContacts(),
+        readSettings().catch(() => null),
       ])
-      if (!contactsRes.ok) throw new Error(`contacts ${contactsRes.status}`)
-
-      const contacts = (await contactsRes.json()) as Contact[]
-      const settings = settingsRes.ok ? await settingsRes.json() : null
 
       set((s) => ({
         contacts: Array.isArray(contacts) ? contacts : [],
@@ -102,16 +101,16 @@ export const useStore = create<StudioState>((set, get) => ({
 
   setStatus: (id, status) => {
     set((s) => ({ contacts: s.contacts.map((c) => (c.id === id ? { ...c, status } : c)) }))
-    adminFetch('/api/admin/contacts', { method: 'PATCH', body: JSON.stringify({ id, status }) })
-      .then((r) => !r.ok && console.error('[studio] setStatus persist failed:', r.status))
-      .catch((e) => console.error('[studio] setStatus persist failed:', e))
+    updateContact(id, { status }).catch((e) =>
+      console.error('[studio] setStatus persist failed:', e instanceof Error ? e.message : e),
+    )
   },
 
   updateNotes: (id, notes) => {
     set((s) => ({ contacts: s.contacts.map((c) => (c.id === id ? { ...c, notes } : c)) }))
-    adminFetch('/api/admin/contacts', { method: 'PATCH', body: JSON.stringify({ id, notes }) })
-      .then((r) => !r.ok && console.error('[studio] updateNotes persist failed:', r.status))
-      .catch((e) => console.error('[studio] updateNotes persist failed:', e))
+    updateContact(id, { notes }).catch((e) =>
+      console.error('[studio] updateNotes persist failed:', e instanceof Error ? e.message : e),
+    )
   },
 
   queueDraft: (contactId, subject, body) => {

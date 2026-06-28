@@ -1,9 +1,9 @@
 'use client'
 
 import { useEffect, useState, type FormEvent } from 'react'
-import { BarChart3, AlertTriangle, Check, RefreshCw, Loader2, Lock } from 'lucide-react'
+import { BarChart3, AlertTriangle, Check, RefreshCw, Lock } from 'lucide-react'
 import { useQueryClient } from '@tanstack/react-query'
-import { adminFetch } from '@/lib/adminClient'
+import { saveSocial } from '@/lib/admin/resources/socials'
 import { useAdminResource, adminKeys, type AdminFetchError } from '@/lib/admin/queries'
 import type { Platform, SocialStat } from '@/lib/mediakit-types'
 import { formatCount } from '@/lib/mediakit-types'
@@ -74,19 +74,11 @@ function normalizeRows(data: unknown): SocialRow[] {
   }))
 }
 
-interface FetchState {
-  status: 'idle' | 'loading' | 'fetched' | 'failed'
-  note?: string
-}
-
 export function SocialStatsEditor() {
   const q = useAdminResource<unknown>('socials')
   const qc = useQueryClient()
   const [rows, setRows] = useState<SocialRow[]>([])
   const [saveState, setSaveState] = useState<Record<string, SaveState>>({})
-  // Per-platform auto-fetch state (loading / freshly-fetched highlight / failure note).
-  const [fetchState, setFetchState] = useState<Record<string, FetchState>>({})
-  const [fetchingAll, setFetchingAll] = useState(false)
 
   // Seed editable rows from the cached query data.
   useEffect(() => {
@@ -99,77 +91,27 @@ export function SocialStatsEditor() {
     setSaveState((prev) => (prev[platform] && prev[platform] !== 'saving' ? { ...prev, [platform]: 'idle' } : prev))
   }
 
-  // Manual edit of a fetched value clears the "fetched" highlight (it's no longer
-  // the scraped number).
-  function clearFetched(platform: string) {
-    setFetchState((prev) => (prev[platform] ? { ...prev, [platform]: { status: 'idle' } } : prev))
-  }
-
   async function saveRow(row: SocialRow, e: FormEvent) {
     e.preventDefault()
     setSaveState((prev) => ({ ...prev, [row.platform]: 'saving' }))
     try {
-      const res = await adminFetch('/api/admin/socials', {
-        method: 'PUT',
-        body: JSON.stringify({
-          platform: row.platform,
-          handle: row.handle,
-          profileUrl: row.profileUrl,
-          followers: row.followers,
-          avgViews: row.avgViews,
-          engagementRate: row.engagementRate,
-          growth30d: row.growth30d,
-          isVisible: row.visible,
-        }),
+      // Direct Supabase write through the authenticated admin session (RLS-gated).
+      await saveSocial(row.platform, {
+        handle: row.handle,
+        profileUrl: row.profileUrl,
+        followers: row.followers,
+        avgViews: row.avgViews,
+        engagementRate: row.engagementRate,
+        growth30d: row.growth30d,
+        isVisible: row.visible,
       })
-      if (res.status === 503) {
-        setSaveState((prev) => ({ ...prev, [row.platform]: 'unconfigured' }))
-        return
-      }
-      if (!res.ok) throw new Error(`Save failed (${res.status})`)
       setSaveState((prev) => ({ ...prev, [row.platform]: 'saved' }))
-      clearFetched(row.platform) // saved → no longer a pending draft
       qc.invalidateQueries({ queryKey: adminKeys.socials })
-    } catch {
-      setSaveState((prev) => ({ ...prev, [row.platform]: 'error' }))
+    } catch (err) {
+      // supabaseBrowser is null when env isn't set → keep the "unconfigured" UI.
+      const unconfigured = err instanceof Error && err.message === 'Studio is not configured.'
+      setSaveState((prev) => ({ ...prev, [row.platform]: unconfigured ? 'unconfigured' : 'error' }))
     }
-  }
-
-  // Best-effort: scrape ONE platform's public profile and pre-fill its follower
-  // field for review (never auto-writes — the influencer confirms + Saves).
-  async function fetchOne(platform: string) {
-    if (!FETCHABLE.has(platform)) return
-    setFetchState((prev) => ({ ...prev, [platform]: { status: 'loading' } }))
-    try {
-      const res = await adminFetch('/api/admin/socials/scrape', {
-        method: 'POST',
-        body: JSON.stringify({ platform }),
-      })
-      const data = await res.json()
-      if (data?.found && typeof data.followers === 'number') {
-        patchRow(platform, { followers: data.followers })
-        setFetchState((prev) => ({
-          ...prev,
-          [platform]: { status: 'fetched', note: `Fetched ${formatCount(data.followers)} — review & Save` },
-        }))
-      } else {
-        setFetchState((prev) => ({
-          ...prev,
-          [platform]: { status: 'failed', note: data?.note || 'Couldn’t read it — enter manually' },
-        }))
-      }
-    } catch {
-      setFetchState((prev) => ({ ...prev, [platform]: { status: 'failed', note: 'Request failed — try again' } }))
-    }
-  }
-
-  // Global: auto-fetch every fetchable platform at once (TikTok + Instagram).
-  async function fetchAll() {
-    const targets = rows.map((r) => r.platform).filter((p) => FETCHABLE.has(p))
-    if (targets.length === 0) return
-    setFetchingAll(true)
-    await Promise.all(targets.map(fetchOne))
-    setFetchingAll(false)
   }
 
   const totalReach = rows.reduce((sum, r) => sum + (r.visible ? r.followers : 0), 0)
@@ -188,23 +130,19 @@ export function SocialStatsEditor() {
         </div>
         <div className="flex items-center gap-3">
           {ready && hasFetchable && (
-            <button
-              type="button"
-              className="btn btn-ghost"
-              onClick={fetchAll}
-              disabled={fetchingAll}
-              title="Reads your public TikTok + Instagram profiles and pre-fills the numbers to review."
-            >
-              {fetchingAll ? (
-                <>
-                  <Loader2 size={15} className="animate-spin" aria-hidden="true" /> Fetching…
-                </>
-              ) : (
-                <>
-                  <RefreshCw size={15} aria-hidden="true" /> Auto-fetch
-                </>
-              )}
-            </button>
+            <div className="flex flex-col items-end gap-1">
+              <button
+                type="button"
+                className="btn btn-ghost"
+                disabled
+                title="Auto-fetch is temporarily off."
+              >
+                <RefreshCw size={15} aria-hidden="true" /> Auto-fetch
+              </button>
+              <span style={{ fontSize: 11.5, color: 'var(--faint)' }}>
+                Auto-fetch is temporarily off — type the follower counts and Save.
+              </span>
+            </div>
           )}
           {ready && rows.length > 0 && (
             <div
@@ -263,7 +201,6 @@ export function SocialStatsEditor() {
         <div className="stack">
           {rows.map((row) => {
             const state = saveState[row.platform] ?? 'idle'
-            const fetch = fetchState[row.platform] ?? { status: 'idle' as const }
             const fetchable = FETCHABLE.has(row.platform)
             const brand = BRAND_META[row.platform as keyof typeof BRAND_META]
             return (
@@ -335,19 +272,10 @@ export function SocialStatsEditor() {
                         <button
                           type="button"
                           className="chip-btn"
-                          onClick={() => fetchOne(row.platform)}
-                          disabled={fetch.status === 'loading'}
-                          title={`Read your public ${platformLabel(row.platform)} and pre-fill the count.`}
+                          disabled
+                          title="Auto-fetch is temporarily off — enter the count manually."
                         >
-                          {fetch.status === 'loading' ? (
-                            <>
-                              <Loader2 size={12} className="animate-spin" aria-hidden="true" /> Fetching…
-                            </>
-                          ) : (
-                            <>
-                              <RefreshCw size={12} aria-hidden="true" /> Fetch
-                            </>
-                          )}
+                          <RefreshCw size={12} aria-hidden="true" /> Fetch
                         </button>
                       ) : (
                         <span className="chip-muted">
@@ -360,19 +288,10 @@ export function SocialStatsEditor() {
                       type="number"
                       inputMode="numeric"
                       min={0}
-                      className={`input${fetch.status === 'fetched' ? ' input-fetched' : ''}`}
+                      className="input"
                       value={String(row.followers)}
-                      onChange={(e) => {
-                        patchRow(row.platform, { followers: toFollowers(e.target.value) })
-                        clearFetched(row.platform)
-                      }}
+                      onChange={(e) => patchRow(row.platform, { followers: toFollowers(e.target.value) })}
                     />
-                    {fetch.note && (
-                      <span className={`field-hint ${fetch.status === 'fetched' ? 'hint-ok' : 'hint-warn'}`}>
-                        {fetch.status === 'fetched' ? <Check size={12} aria-hidden="true" /> : <AlertTriangle size={12} aria-hidden="true" />}
-                        {fetch.note}
-                      </span>
-                    )}
                   </div>
 
                   <div className="field">

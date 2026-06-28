@@ -92,8 +92,33 @@ export function RevealRoot() {
       })
     }
 
+    // 4 — scrollspy: light up the nav link for the section in view so the nav animates in
+    // sync with the smooth scroll. A section is "active" while it crosses a thin band in the
+    // upper-middle of the viewport. #top (hero) and #contact (the CTA button) have no .nlink,
+    // so reaching them simply clears the others. Runs regardless of reduced-motion — it's a
+    // color/underline change, not movement.
+    const navLinks = Array.from(root.querySelectorAll<HTMLAnchorElement>('.nlink'))
+    const sections = ['top', 'reach', 'partners', 'rates', 'contact']
+      .map((id) => document.getElementById(id))
+      .filter((el): el is HTMLElement => Boolean(el))
+    let spy: IntersectionObserver | null = null
+    if (navLinks.length > 0 && sections.length > 0) {
+      spy = new IntersectionObserver(
+        (entries) => {
+          for (const e of entries) {
+            if (!e.isIntersecting) continue
+            const id = (e.target as HTMLElement).id
+            navLinks.forEach((a) => a.classList.toggle('active', a.getAttribute('href') === `#${id}`))
+          }
+        },
+        { rootMargin: '-45% 0px -50% 0px', threshold: 0 },
+      )
+      sections.forEach((s) => spy!.observe(s))
+    }
+
     return () => {
       io?.disconnect()
+      spy?.disconnect()
       window.clearTimeout(safety)
       window.removeEventListener('scroll', onScroll)
       window.removeEventListener('resize', onScroll)

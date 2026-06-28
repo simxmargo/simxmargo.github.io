@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react'
 import { Mail, ImageIcon, ShieldCheck, AlertTriangle, RotateCcw } from 'lucide-react'
 import { useQueryClient } from '@tanstack/react-query'
-import { adminFetch } from '@/lib/adminClient'
+import { saveSettings } from '@/lib/admin/resources/settings'
 import { useStore } from '@/lib/store'
 import { useAdminResource, adminKeys, type AdminFetchError } from '@/lib/admin/queries'
 import { StudioImageSlot } from '@/components/admin/StudioImageSlot'
@@ -60,20 +60,14 @@ export function SettingsPage() {
     setSave('saving')
     setSaveErr('')
     try {
-      const res = await adminFetch('/api/admin/settings', {
-        method: 'PUT',
-        body: JSON.stringify({ faviconUrl, dailyCap }),
-      })
-      if (res.status === 503) return setSave('unconfigured')
-      if (!res.ok) {
-        setSaveErr(`Save failed (${res.status}).`)
-        return setSave('error')
-      }
+      await saveSettings({ faviconUrl, dailyCap })
       setSave('saved')
       qc.invalidateQueries({ queryKey: adminKeys.settings })
       void rehydrate() // refresh the queue meter so it picks up the new daily cap
-    } catch {
-      setSaveErr('Couldn’t reach the server. Try again.')
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : ''
+      if (msg === 'Studio is not configured.') return setSave('unconfigured')
+      setSaveErr(msg || 'Couldn’t reach the server. Try again.')
       setSave('error')
     }
   }

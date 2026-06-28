@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState, type CSSProperties } from 're
 import {
   Plus, Pencil, Trash2, Eye, EyeOff, GripVertical,
   Link2, AlertTriangle, Check, Loader2, LayoutGrid,
-  RefreshCw, X, Video, Upload, Download,
+  RefreshCw, X, Video, Download,
 } from 'lucide-react'
 import { useQueryClient } from '@tanstack/react-query'
 import {
@@ -15,18 +15,15 @@ import {
   SortableContext, sortableKeyboardCoordinates, useSortable, rectSortingStrategy, arrayMove,
 } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
-import { adminFetch } from '@/lib/adminClient'
 import { useAdminResource, adminKeys, AdminFetchError } from '@/lib/admin/queries'
+import { createBrand, updateBrand, deleteBrand, reorderBrands, type AdminBrand } from '@/lib/admin/resources/brands'
 import { ImageField } from '@/components/admin/ImageField'
+import { StudioImageSlot } from '@/components/admin/StudioImageSlot'
 import { PortfolioSkeleton } from '@/components/admin/Skeleton'
 import { formatCount, parseCompact, type PortfolioBrand } from '@/lib/mediakit-types'
 import { categoryKey, type CategoryKey } from '@/lib/mediakit/brandDetail'
 import { useDialog } from '@/lib/admin/useDialog'
 import { PullVideosModal } from '@/components/admin/PullVideosModal'
-
-// The admin /api/admin/brands GET returns sort_order + is_visible on top of the
-// public PortfolioBrand fields — this screen needs them to reorder + show/hide.
-type AdminBrand = PortfolioBrand & { isVisible: boolean; sortOrder: number }
 
 // Per-category dot colour for the brand cards (mirrors the public modal's category
 // system via categoryKey). Purely decorative — never the only signal (label too).
@@ -158,12 +155,7 @@ export function PortfolioManager() {
     setDeleteBusy(true)
     setServiceKeyMissing(false)
     try {
-      const res = await adminFetch(`/api/admin/brands?id=${encodeURIComponent(deleting.id)}`, { method: 'DELETE' })
-      if (res.status === 503) {
-        setServiceKeyMissing(true)
-        return
-      }
-      if (!res.ok) throw new Error(`Delete failed (${res.status})`)
+      await deleteBrand(deleting.id)
       setSavedAt(Date.now())
       setEditing(null) // close the editor too if the delete came from it
       await invalidateBrands()
@@ -191,13 +183,7 @@ export function PortfolioManager() {
     qc.setQueryData(adminKeys.brands, next)
     setServiceKeyMissing(false)
     try {
-      const res = await adminFetch('/api/admin/brands', { method: 'PUT', body: JSON.stringify({ order }) })
-      if (res.status === 503) {
-        setServiceKeyMissing(true)
-        await invalidateBrands()
-        return
-      }
-      if (!res.ok) throw new Error(`Reorder failed (${res.status})`)
+      await reorderBrands(order)
     } catch (err) {
       setLoadError(err instanceof Error ? err.message : 'Reorder failed.')
       await invalidateBrands()
@@ -252,15 +238,7 @@ export function PortfolioManager() {
   async function toggleVisible(b: AdminBrand) {
     setServiceKeyMissing(false)
     try {
-      const res = await adminFetch('/api/admin/brands', {
-        method: 'PUT',
-        body: JSON.stringify({ id: b.id, isVisible: !b.isVisible }),
-      })
-      if (res.status === 503) {
-        setServiceKeyMissing(true)
-        return
-      }
-      if (!res.ok) throw new Error(`Update failed (${res.status})`)
+      await updateBrand(b.id, { isVisible: !b.isVisible })
       setSavedAt(Date.now())
       await invalidateBrands()
     } catch (err) {
@@ -294,7 +272,16 @@ export function PortfolioManager() {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <button type="button" onClick={() => setPulling(true)} className="btn btn-ghost">
+          {/* Auto-scraper temporarily disabled (Supabase SPA migration). The trigger
+              is left wired (PullVideosModal is rendered below) so re-enabling later is
+              just removing `disabled`. */}
+          <button
+            type="button"
+            onClick={() => setPulling(true)}
+            className="btn btn-ghost"
+            disabled
+            title="Pulling videos is temporarily off — add a brand's Top content manually in the editor."
+          >
             <Download size={16} aria-hidden="true" /> Pull videos
           </button>
           <button type="button" onClick={() => openEditor({ ...EMPTY_FORM })} className="btn btn-primary">
@@ -327,7 +314,7 @@ export function PortfolioManager() {
           </div>
         )}
 
-        <AddBrandByUrl onDraft={openEditor} />
+        <AddBrandByUrl />
 
         {q.isLoading ? (
           <PortfolioSkeleton />
@@ -591,12 +578,8 @@ function BrandEditorModal({
     setSaving(true)
     setError(null)
     try {
-      const res = await adminFetch('/api/admin/brands', { method: form.id ? 'PUT' : 'POST', body: JSON.stringify(form) })
-      if (res.status === 503) {
-        on503()
-        return
-      }
-      if (!res.ok) throw new Error(`Save failed (${res.status})`)
+      if (form.id) await updateBrand(form.id, form)
+      else await createBrand(form)
       await onSaved()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Save failed.')
@@ -649,7 +632,7 @@ function BrandEditorModal({
             onChange={(url) => set('logoUrl', url)}
             folder="logos"
             aspect="1 / 1"
-            hint="Upload a square logo, or paste a URL. Auto-filled from the site when you add by URL."
+            hint="Upload a square logo, or paste a URL."
           />
 
           <div className="grid2">
@@ -711,7 +694,6 @@ function BrandEditorModal({
                 draft={c}
                 onChange={(patch) => updateContent(i, patch)}
                 onRemove={() => removeContent(i)}
-                on503={on503}
               />
             ))}
             <button type="button" className="btn btn-ghost btn-sm" onClick={addContent} style={{ alignSelf: 'flex-start' }}>
@@ -743,48 +725,16 @@ function BrandEditorModal({
   )
 }
 
-// Paste a brand's site → POST /api/admin/scrape-meta → prefill the BrandEditor with
-// the derived draft (name, logo, blurb) for the admin to review + save. Returns a
-// DRAFT only; nothing is written until the admin saves.
-function AddBrandByUrl({ onDraft }: { onDraft: (form: BrandForm) => void }) {
+// "Add from URL" — TEMPORARILY DISABLED (Supabase SPA migration). This card used to
+// POST /api/admin/scrape-meta to prefill the editor from a brand's site, but that
+// scrape endpoint is being removed. The control is shown disabled with a note; the
+// MANUAL "Add brand" flow (header button → empty editor) is unaffected. Re-enable by
+// restoring the fetchMeta/scrape-meta flow + the `onDraft` prop from git history.
+function AddBrandByUrl() {
   const [url, setUrl] = useState('')
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-
-  async function fetchMeta(e: React.FormEvent) {
-    e.preventDefault()
-    const trimmed = url.trim()
-    if (!trimmed) return
-    setLoading(true)
-    setError(null)
-    try {
-      const res = await adminFetch('/api/admin/scrape-meta', {
-        method: 'POST',
-        body: JSON.stringify({ url: trimmed }),
-      })
-      const json = await res.json().catch(() => ({}))
-      if (!res.ok) throw new Error(json?.error || `Lookup failed (${res.status})`)
-      onDraft({
-        brand: json.brand ?? '',
-        website: json.website ?? trimmed,
-        logoUrl: json.logoUrl ?? '',
-        blurb: json.blurb ?? '',
-        campaignTitle: json.campaignTitle ?? '',
-        category: '',
-        featured: false,
-        rowIndex: '',
-        media: [],
-      })
-      setUrl('')
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Lookup failed.')
-    } finally {
-      setLoading(false)
-    }
-  }
 
   return (
-    <form onSubmit={fetchMeta} className="card">
+    <form onSubmit={(e) => e.preventDefault()} className="card">
       <div className="card-head">
         <span className="ico-badge"><Link2 size={18} aria-hidden="true" /></span>
         <h2 className="card-title">Add from URL</h2>
@@ -798,95 +748,36 @@ function AddBrandByUrl({ onDraft }: { onDraft: (form: BrandForm) => void }) {
             className="input flex-1"
             value={url}
             onChange={(e) => setUrl(e.target.value)}
-            disabled={loading}
+            disabled
           />
-          <button type="submit" disabled={loading || !url.trim()} className="btn btn-primary">
-            {loading ? <Loader2 size={16} className="animate-spin" aria-hidden="true" /> : <RefreshCw size={16} aria-hidden="true" />}
-            {loading ? 'Fetching…' : 'Fetch'}
+          <button type="submit" disabled className="btn btn-primary">
+            <RefreshCw size={16} aria-hidden="true" /> Fetch
           </button>
         </div>
-        {error ? (
-          <p className="flex items-center gap-1" style={{ fontSize: 12, color: 'var(--danger)' }}>
-            <AlertTriangle size={12} aria-hidden="true" /> {error}
-          </p>
-        ) : (
-          <p className="field-hint">
-            Paste a brand&rsquo;s site — it opens the form prefilled with the name &amp; link for you to review
-            and finish.
-          </p>
-        )}
+        <p className="field-hint">
+          Auto-fetch is temporarily off — use <strong>Add brand</strong> above and paste the brand&rsquo;s logo
+          URL manually.
+        </p>
       </div>
     </form>
   )
 }
 
-// One "Top content" reel row: a 9:16 cover (click to upload), the post URL with a
-// TikTok auto-fetch, caption, and manual view/like counts (counts aren't fetchable).
+// One "Top content" reel row: a 9:16 cover (upload via the shared StudioImageSlot),
+// the post URL, caption, and manual view/like counts. The per-row "Fetch" auto-pull
+// (POST /api/admin/brands/fetch-post) is TEMPORARILY DISABLED (Supabase SPA migration)
+// — that scrape endpoint is being removed, so everything here is entered by hand. The
+// cover upload now flows through StudioImageSlot (the shared, owned upload component),
+// not a direct adminFetch.
 function ContentRow({
   draft,
   onChange,
   onRemove,
-  on503,
 }: {
   draft: ContentDraft
   onChange: (patch: Partial<ContentDraft>) => void
   onRemove: () => void
-  on503: () => void
 }) {
-  const [fetching, setFetching] = useState(false)
-  const [uploading, setUploading] = useState(false)
-  const [note, setNote] = useState('')
-
-  async function fetchPost() {
-    const u = draft.url.trim()
-    if (!u) return
-    setFetching(true)
-    setNote('')
-    try {
-      const res = await adminFetch('/api/admin/brands/fetch-post', { method: 'POST', body: JSON.stringify({ url: u }) })
-      const j = await res.json().catch(() => ({}))
-      if (!res.ok) {
-        setNote(j?.error || `Fetch failed (${res.status})`)
-        return
-      }
-      const patch: Partial<ContentDraft> = {}
-      if (j.platform === 'tiktok' || j.platform === 'instagram') patch.platform = j.platform
-      if (j.thumbUrl) patch.thumbUrl = j.thumbUrl
-      if (j.caption) patch.caption = j.caption
-      onChange(patch)
-      setNote(j.note || (j.thumbUrl ? 'Cover + caption pulled — add the view/like counts.' : 'Detected — fill in the details.'))
-    } catch {
-      setNote('Request failed — try again.')
-    } finally {
-      setFetching(false)
-    }
-  }
-
-  async function uploadThumb(file: File) {
-    setUploading(true)
-    setNote('')
-    try {
-      const fd = new FormData()
-      fd.append('file', file)
-      fd.append('folder', 'content')
-      const res = await adminFetch('/api/admin/upload', { method: 'POST', body: fd })
-      if (res.status === 503) {
-        on503()
-        return
-      }
-      const j = await res.json().catch(() => ({}))
-      if (!res.ok) {
-        setNote(j?.error || 'Upload failed.')
-        return
-      }
-      onChange({ thumbUrl: j.url })
-    } catch {
-      setNote('Upload failed.')
-    } finally {
-      setUploading(false)
-    }
-  }
-
   // Live echo of the typed counts in the compact form the cards render ("1.8M"),
   // so the influencer can sanity-check the formatting as they type.
   const preview = (raw: string): string => {
@@ -898,37 +789,22 @@ function ContentRow({
 
   return (
     <div className="content-row">
-      <label className="content-thumb" title="Upload a cover image">
-        {draft.thumbUrl ? (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img src={draft.thumbUrl} alt="" />
-        ) : (
-          <span className="content-thumb-empty">{uploading ? <Loader2 size={16} className="animate-spin" /> : <Upload size={16} />}</span>
-        )}
-        <input
-          type="file"
-          accept="image/*"
-          aria-label="Upload cover image"
-          style={{ display: 'none' }}
-          onChange={(e) => {
-            const f = e.target.files?.[0]
-            if (f) void uploadThumb(f)
-            e.target.value = ''
-          }}
-        />
-      </label>
+      <StudioImageSlot
+        value={draft.thumbUrl}
+        onChange={(url) => onChange({ thumbUrl: url })}
+        folder="content"
+        shape="rounded"
+        className="content-thumb"
+        placeholder="Cover"
+        ariaLabel="Upload a cover image"
+      />
       <div className="content-fields">
-        <div className="content-url">
-          <input
-            className="input"
-            placeholder="https://www.tiktok.com/@… or instagram.com/reel/…"
-            value={draft.url}
-            onChange={(e) => onChange({ url: e.target.value })}
-          />
-          <button type="button" className="btn btn-ghost btn-sm" onClick={() => void fetchPost()} disabled={fetching || !draft.url.trim()}>
-            {fetching ? <Loader2 size={14} className="animate-spin" aria-hidden="true" /> : <RefreshCw size={14} aria-hidden="true" />} Fetch
-          </button>
-        </div>
+        <input
+          className="input"
+          placeholder="https://www.tiktok.com/@… or instagram.com/reel/…"
+          value={draft.url}
+          onChange={(e) => onChange({ url: e.target.value })}
+        />
         <input className="input" placeholder="Caption" value={draft.caption} onChange={(e) => onChange({ caption: e.target.value })} />
         <div className="content-stats">
           <input className="input" type="text" placeholder="Views (e.g. 1.8M)" value={draft.views} onChange={(e) => onChange({ views: e.target.value })} />
@@ -942,7 +818,7 @@ function ContentRow({
             {likesPreview && `${likesPreview} likes`}
           </span>
         )}
-        {note && <span className="field-hint">{note}</span>}
+        <span className="field-hint">Auto-fetch is temporarily off — paste the link, cover &amp; counts manually.</span>
       </div>
       <button type="button" className="content-x" aria-label="Remove this content" onClick={onRemove}>
         <X size={14} aria-hidden="true" />

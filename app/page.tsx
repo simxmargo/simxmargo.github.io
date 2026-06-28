@@ -3,13 +3,7 @@ import type { CSSProperties } from 'react'
 import { getMediaKit } from '@/lib/mediakit/data'
 import { SITE_URL } from '@/lib/siteUrl'
 import { formatCount, totalReach } from '@/lib/mediakit-types'
-import { RevealRoot } from '@/components/mediakit/RevealRoot'
-import { TopNav } from '@/components/mediakit/TopNav'
-import { HeroSection } from '@/components/mediakit/HeroSection'
-import { SocialStatsStrip } from '@/components/mediakit/SocialStatsStrip'
-import { PortfolioGrid } from '@/components/mediakit/PortfolioGrid'
-import { RateAndContact } from '@/components/mediakit/RateAndContact'
-import { MediaKitFooter } from '@/components/mediakit/MediaKitFooter'
+import { MediaKitLive } from '@/components/mediakit/MediaKitLive'
 
 // ISR: re-fetch the live mediakit data at most once a minute (Supabase queries
 // aren't covered by Next's fetch cache, so this is what bounds freshness).
@@ -72,7 +66,9 @@ export default async function MediaKitPage() {
   } as CSSProperties
 
   // The whole public page is scoped under `.mk` (the design's theme + stylesheet
-  // live there in globals.css). RevealRoot drives the scroll-reveal choreography.
+  // live there in globals.css). The `.mk` wrapper, theme CSS vars, and JSON-LD are
+  // server-rendered from the build-time snapshot (SEO + identical first paint);
+  // MediaKitLive renders the visual tree and refreshes it to live data client-side.
   return (
     <div className="mk" style={mkStyle}>
       <script
@@ -80,26 +76,7 @@ export default async function MediaKitPage() {
         // Escape `<` so any `</script>` inside DB-authored text can't break out.
         dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd).replace(/</g, '\\u003c') }}
       />
-      <RevealRoot />
-      <TopNav name={profile.displayName} />
-      <HeroSection profile={profile} socials={socials} />
-      <SocialStatsStrip socials={socials} />
-      <PortfolioGrid brands={brands} />
-      <RateAndContact profile={profile} />
-      <MediaKitFooter profile={profile} socials={socials} />
-
-      {/* TEMP — hardcoded admin link for easy testing; remove before launch. */}
-      <a
-        href="/admin"
-        style={{
-          position: 'fixed', bottom: 16, right: 16, zIndex: 100,
-          background: 'var(--accent)', color: '#14110d', padding: '8px 14px',
-          borderRadius: 4, fontSize: 13, fontWeight: 600, textDecoration: 'none',
-          boxShadow: '0 4px 16px rgba(0,0,0,.35)',
-        }}
-      >
-        Admin →
-      </a>
+      <MediaKitLive initial={{ profile, socials, brands }} />
     </div>
   )
 }

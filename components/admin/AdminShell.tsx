@@ -15,6 +15,7 @@ import { SocialStatsEditor } from '@/components/admin/SocialStatsEditor'
 import { InquiriesInbox } from '@/components/admin/InquiriesInbox'
 import { ThemeEditor } from '@/components/admin/ThemeEditor'
 import { SidebarBrand } from '@/components/admin/SidebarBrand'
+import { signOutAdmin } from '@/lib/admin/auth'
 
 type Panel = 'profile' | 'portfolio' | 'social' | 'inquiries' | 'theme' | 'contacts' | 'queue' | 'settings'
 
@@ -105,6 +106,14 @@ function StudioShell() {
           <a href="/" target="_blank" rel="noreferrer" className="side-link">
             View public media kit →
           </a>
+          <button
+            type="button"
+            className="side-link"
+            onClick={() => void signOutAdmin()}
+            style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', textAlign: 'left' }}
+          >
+            Log out
+          </button>
         </div>
       </aside>
 

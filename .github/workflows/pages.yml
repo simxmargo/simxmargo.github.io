@@ -44,11 +44,11 @@ jobs:
 
       - run: npm ci
 
-      # Static export is all-or-nothing for the app/ tree: a single route handler
-      # makes `next build` (output:'export') fail. So carve out the server-only
-      # surfaces in this throwaway CI checkout (the working copy keeps them).
-      - name: Carve out server-only surfaces
-        run: rm -rf app/api app/admin app/opengraph-image.tsx
+      # The admin is now a client-only Supabase-Auth SPA, so it ships in the export.
+      # Only the dynamic OG route must go (next/og can't run under output:'export');
+      # the page declares a static /og.png instead. (app/api was removed entirely.)
+      - name: Carve out the dynamic OG route
+        run: rm -rf app/opengraph-image.tsx
 
       - name: Build static export
         env:
@@ -62,6 +62,8 @@ jobs:
           # with ${{ secrets.NAME }} and add the secret in repo Settings → Actions.
           NEXT_PUBLIC_SUPABASE_URL: https://zzgypushqcpchfxrjexc.supabase.co
           NEXT_PUBLIC_SUPABASE_ANON_KEY: sb_publishable_DZxoO2dE_YVKvr1jkBkoDg_G5XxILGn
+          # Admin login email (not secret — single-password login; ships in the bundle).
+          NEXT_PUBLIC_ADMIN_EMAIL: simxmargo.collab@gmail.com
         run: npm run build
 
       - run: touch out/.nojekyll # belt-and-suspenders: stop Jekyll dropping _next/
