@@ -272,15 +272,14 @@ export function PortfolioManager() {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          {/* Auto-scraper temporarily disabled (Supabase SPA migration). The trigger
-              is left wired (PullVideosModal is rendered below) so re-enabling later is
-              just removing `disabled`. */}
+          {/* Bulk-supply: pull a creator's recent posts by handle (pull-videos Edge
+              Function → ScrapeCreators), auto-match to brands by caption, then append the
+              chosen videos to each brand's Top content. */}
           <button
             type="button"
             onClick={() => setPulling(true)}
             className="btn btn-ghost"
-            disabled
-            title="Pulling videos is temporarily off — add a brand's Top content manually in the editor."
+            title="Pull a creator's recent TikTok/Instagram posts and add them to your brands"
           >
             <Download size={16} aria-hidden="true" /> Pull videos
           </button>

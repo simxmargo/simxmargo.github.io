@@ -259,9 +259,15 @@ body {
 .mk .rates { padding: clamp(64px, 9vw, 120px) 0; border-top: 1px solid var(--line); }
 .mk .rate-list { border-top: 1px solid var(--line); }
 .mk .rate-row { display: grid; grid-template-columns: 1fr auto auto auto; gap: clamp(14px, 3vw, 40px); align-items: center; padding: clamp(20px, 3vw, 32px) 0; border-bottom: 1px solid var(--line); }
-.mk .rate-title { font-size: clamp(22px, 3vw, 38px); font-weight: 600; line-height: 1; }
+/* Rate row title/price keep the shared .display Bodoni for section consistency, but
+   pin a low optical size + heavier weight so the high-contrast hairlines read on the
+   dark bg. Without this, font-optical-sizing:auto drives opsz up at the title's
+   rendered size, thinning the strokes to a point where Windows ClearType fringes them
+   red/cyan (the "glitch" look). Scoped here, NOT on shared .mk .display — so the liked
+   "Work, priced simply" heading (.mk .h2) is untouched. */
+.mk .rate-title { font-size: clamp(22px, 3vw, 38px); font-weight: 700; line-height: 1; color: var(--ink); font-optical-sizing: none; font-variation-settings: 'opsz' 16; }
 .mk .rate-meta { font-family: var(--font-archivo), 'Archivo', system-ui, sans-serif; font-size: 14.5px; color: var(--muted); white-space: nowrap; letter-spacing: 0.01em; }
-.mk .rate-price { font-size: clamp(19px, 2.4vw, 28px); font-weight: 600; white-space: nowrap; text-align: right; }
+.mk .rate-price { font-size: clamp(19px, 2.4vw, 28px); font-weight: 700; white-space: nowrap; text-align: right; color: var(--ink); font-optical-sizing: none; font-variation-settings: 'opsz' 16; }
 .mk .rate-btn { padding: 10px 20px; font-size: 13.5px; }
 .mk .rate-btn:hover { border-color: var(--accent); color: var(--accent); }
 
@@ -491,6 +497,13 @@ body {
 .studio .pv-cap { font-size: 13px; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .studio .pv-stats { font-size: 11.5px; color: var(--faint); margin-top: 2px; }
 .studio .pv-select { width: auto; flex: none; max-width: 160px; padding: 7px 10px; font-size: 13px; }
+.studio .pv-check { flex: none; width: 16px; height: 16px; accent-color: var(--accent); cursor: pointer; }
+/* Handle/platform input row + per-brand group headers in the Pull-videos modal */
+.studio .pv-form { display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; }
+.studio .pv-group { display: flex; flex-direction: column; gap: 8px; }
+.studio .pv-group-head { display: flex; align-items: center; gap: 8px; }
+.studio .pv-group-title { font-size: 13px; font-weight: 600; color: var(--ink); }
+.studio .pv-group-count { font-size: 11.5px; font-weight: 600; color: var(--faint); background: var(--field); border: 1px solid var(--line); border-radius: 999px; padding: 1px 8px; }
 
 /* "Top content" editor rows (brand modal reels) */
 .studio .content-sec { display: flex; flex-direction: column; gap: 12px; padding-top: 6px; border-top: 1px solid var(--line); }
