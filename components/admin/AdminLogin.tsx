@@ -128,10 +128,10 @@ const card: CSSProperties = {
 }
 const title: CSSProperties = {
   margin: 0,
-  fontFamily: "var(--font-bodoni), 'Bodoni Moda', Georgia, serif",
-  fontSize: 26,
-  fontWeight: 600,
-  letterSpacing: '0.01em',
+  fontFamily: "var(--font-druk), 'Druk Wide', 'Archivo Black', sans-serif",
+  fontSize: 18,
+  fontWeight: 700,
+  letterSpacing: '-0.01em',
   color: 'var(--ink, #f1ece2)',
 }
 const sub: CSSProperties = { margin: 0, fontSize: 14, color: 'var(--muted, #a59c8f)' }
