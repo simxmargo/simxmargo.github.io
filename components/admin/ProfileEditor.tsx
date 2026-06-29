@@ -331,7 +331,7 @@ export function ProfileEditor() {
               value={form.ogImageUrl}
               onChange={(url) => update('ogImageUrl', url)}
               folder="og"
-              hint="The thumbnail brands see when your kit link is shared (og:image)."
+              hint="The photo behind your auto-generated share card (your name + total reach are overlaid on top). It's baked in on the next deploy — and social platforms cache the old one, so re-shares can lag."
             />
           </div>
         </section>
