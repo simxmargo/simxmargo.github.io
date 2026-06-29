@@ -31,13 +31,54 @@ export interface PublicProfile {
   mediaKitUrl: string
   totalFollowers: number | null // null ⇒ compute SUM(socialStats.followers)
   rateCard: RateCardItem[]
-  showRates: boolean // false ⇒ hide the public Rates section (+ its nav link)
+  showRates: boolean // false ⇒ swap each PRICE for a "Let's talk" invite (section still shows)
+  showRatesSection: boolean // false ⇒ hide the whole Rates section + its nav link (0011)
   pressLogos: PressLogo[]
   seo: { title?: string; description?: string; ogImageUrl?: string }
   // Editable from the admin Theme editor; applied as CSS vars on the public page.
   // recentAccents = the last few saved accent colours (newest first), for quick re-pick.
   theme?: { accent?: string; tileTheme?: 'light' | 'dark'; recentAccents?: string[] }
+  // Editable marketing copy for otherwise-hardcoded strings (the footer headline, …).
+  // Stored as a jsonb map on public_profile.content; any missing key falls back to
+  // DEFAULT_SITE_COPY at render time, so the kit never shows a blank string.
+  content?: SiteCopy
   isPublished: boolean
+}
+
+// Admin-editable copy for strings that used to be hardcoded in the public components.
+// Keys are added here (and given a default below) as more sections become editable.
+export interface SiteCopy {
+  // Footer closing line. The emphasis word is rendered in the accent colour; blank = none.
+  footerHeadline?: string // e.g. "Let's make something real through reels."
+  footerEmphasis?: string // the word within the headline rendered in the accent, e.g. "reels"
+  // Section eyebrows (small uppercase label) + titles. About's title is the display name,
+  // so only its eyebrow is editable here.
+  aboutEyebrow?: string
+  ratesEyebrow?: string
+  ratesTitle?: string
+  collaborateEyebrow?: string
+  collaborateTitle?: string
+  partnersEyebrow?: string
+  partnersTitle?: string
+  // Hero call-to-action button labels.
+  heroCtaPrimary?: string
+  heroCtaSecondary?: string
+}
+
+// Fallbacks used wherever a SiteCopy key is unset — the single source of truth for the
+// default wording, shared by the public renderers and the admin editor's placeholders.
+export const DEFAULT_SITE_COPY: Required<SiteCopy> = {
+  footerHeadline: "Let's make something real through reels.",
+  footerEmphasis: 'reels',
+  aboutEyebrow: '03 — About',
+  ratesEyebrow: 'Rates',
+  ratesTitle: 'Work, priced simply',
+  collaborateEyebrow: 'Collaborate',
+  collaborateTitle: 'Work with me',
+  partnersEyebrow: 'Trusted by',
+  partnersTitle: 'Brand partners',
+  heroCtaPrimary: 'Work with me',
+  heroCtaSecondary: 'See partners',
 }
 
 export type Platform = 'tiktok' | 'instagram' | 'facebook' | 'youtube' | 'x' | 'twitch'

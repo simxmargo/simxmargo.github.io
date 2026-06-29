@@ -37,9 +37,11 @@ function mapProfile(r: any): PublicProfile {
     totalFollowers: r.total_followers ?? null,
     rateCard: (r.rate_card ?? []) as RateCardItem[],
     showRates: r.show_rates !== false, // default true (column added in 0009)
+    showRatesSection: r.show_rates_section !== false, // default true (column added in 0011)
     pressLogos: r.press_logos ?? [],
     seo: r.seo ?? {},
     theme: r.theme ?? {},
+    content: r.content ?? {},
     isPublished: Boolean(r.is_published),
   }
 }

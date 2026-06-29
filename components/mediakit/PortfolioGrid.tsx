@@ -8,6 +8,10 @@ import { buildBrandDetail, type CategoryKey } from '@/lib/mediakit/brandDetail'
 interface PortfolioGridProps {
   brands: PortfolioBrand[]
   socials?: SocialStat[]
+  // Editable section copy (admin → Content), resolved with defaults by the parent —
+  // PortfolioGrid doesn't take the whole profile, so these come in pre-resolved.
+  partnersEyebrow: string
+  partnersTitle: string
 }
 
 // The brand modal's "no previews yet" state links out to the creator's own channels.
@@ -113,7 +117,7 @@ function catIcon(category: string) {
 
 const CLOSE_MS = 240
 
-export function PortfolioGrid({ brands, socials = [] }: PortfolioGridProps) {
+export function PortfolioGrid({ brands, socials = [], partnersEyebrow, partnersTitle }: PortfolioGridProps) {
   // Split brands across the TWO marquee rows with NO cross-row repetition. An
   // explicit rowIndex (assigned in admin) wins; otherwise auto-split the list in half.
   // (Each row still renders its own subset twice — that duplication is the seamless
@@ -130,6 +134,10 @@ export function PortfolioGrid({ brands, socials = [] }: PortfolioGridProps) {
   const closeRef = useRef<HTMLButtonElement>(null)
   const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const closingRef = useRef(false)
+
+  // Brand list view: collapsed = the two auto-scrolling marquee rows; expanded = a
+  // static responsive grid of ALL brands. "See all" / "Show less" toggles between them.
+  const [expanded, setExpanded] = useState(false)
 
   // Marquee drive: rAF-controlled translateX per row so we can SMOOTHLY ramp speed
   // (CSS animation-duration can't be eased — it jumps). Base speed is fast; a row
@@ -311,8 +319,8 @@ export function PortfolioGrid({ brands, socials = [] }: PortfolioGridProps) {
       <div className="wrap">
         <div className="sec-head">
           <div>
-            <div className="label reveal">Trusted by</div>
-            <h2 className="display h2 reveal">Brand partners</h2>
+            <div className="label reveal">{partnersEyebrow}</div>
+            <h2 className="display h2 reveal">{partnersTitle}</h2>
           </div>
           <div className="legend reveal">
             <span className="leg">
@@ -329,26 +337,47 @@ export function PortfolioGrid({ brands, socials = [] }: PortfolioGridProps) {
             </span>
           </div>
         </div>
-        <div
-          className="mqrow"
-          onMouseEnter={() => (hoveredRef.current.left = true)}
-          onMouseLeave={() => (hoveredRef.current.left = false)}
-        >
-          <div className="mqtrack mq-left" ref={leftRef}>
-            {tiles(rowA, 'a1')}
-            {tiles(rowA, 'a2', true)}
+        {/* Collapsed: two auto-scrolling rows. Kept MOUNTED (display:none when expanded)
+            so the marquee refs/rAF stay valid; hidden from a11y + tab order while off. */}
+        <div className={`mqset${expanded ? ' is-collapsed' : ''}`} aria-hidden={expanded || undefined}>
+          <div
+            className="mqrow"
+            onMouseEnter={() => (hoveredRef.current.left = true)}
+            onMouseLeave={() => (hoveredRef.current.left = false)}
+          >
+            <div className="mqtrack mq-left" ref={leftRef}>
+              {tiles(rowA, 'a1')}
+              {tiles(rowA, 'a2', true)}
+            </div>
+          </div>
+          <div
+            className="mqrow"
+            onMouseEnter={() => (hoveredRef.current.right = true)}
+            onMouseLeave={() => (hoveredRef.current.right = false)}
+          >
+            <div className="mqtrack mq-right" ref={rightRef}>
+              {tiles(rowB, 'b1')}
+              {tiles(rowB, 'b2', true)}
+            </div>
           </div>
         </div>
-        <div
-          className="mqrow"
-          onMouseEnter={() => (hoveredRef.current.right = true)}
-          onMouseLeave={() => (hoveredRef.current.right = false)}
-        >
-          <div className="mqtrack mq-right" ref={rightRef}>
-            {tiles(rowB, 'b1')}
-            {tiles(rowB, 'b2', true)}
+
+        {/* Expanded: every brand as a static responsive grid (each brand once). */}
+        {expanded && <div className="lgrid">{tiles(brands, 'grid')}</div>}
+
+        {brands.length > 0 && (
+          <div className="lmore">
+            <button
+              type="button"
+              className="btn btn-ghost lmore-btn"
+              aria-expanded={expanded}
+              onClick={() => setExpanded((v) => !v)}
+            >
+              {expanded ? 'Show Less' : 'Show All'}
+              <span className="lmore-ic" aria-hidden="true">{expanded ? '↑' : '↓'}</span>
+            </button>
           </div>
-        </div>
+        )}
       </div>
 
       {vm && (

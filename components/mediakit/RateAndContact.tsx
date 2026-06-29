@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from 'react'
 import type { CollabInquiryInput, PublicProfile } from '@/lib/mediakit-types'
+import { DEFAULT_SITE_COPY } from '@/lib/mediakit-types'
 import { submitCollab } from '@/lib/mediakit/collab'
 
 const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/
@@ -16,6 +17,12 @@ const PRICE_HIDDEN_LABEL = "Let's talk"
 // the form. Kept together so the page itself can stay a Server Component.
 export function RateAndContact({ profile }: { profile: PublicProfile }) {
   const rateCard = profile.rateCard
+  // Editable section copy (admin → Content), each falling back to the shared default.
+  const c = profile.content ?? {}
+  const ratesEyebrow = c.ratesEyebrow?.trim() || DEFAULT_SITE_COPY.ratesEyebrow
+  const ratesTitle = c.ratesTitle?.trim() || DEFAULT_SITE_COPY.ratesTitle
+  const collaborateEyebrow = c.collaborateEyebrow?.trim() || DEFAULT_SITE_COPY.collaborateEyebrow
+  const collaborateTitle = c.collaborateTitle?.trim() || DEFAULT_SITE_COPY.collaborateTitle
   // Contact email comes from the profile (admin → Profile → Reply-to email), with
   // the design's address as a last-resort fallback so the link is never empty.
   const contactEmail = profile.replyToEmail?.trim() || 'hello@simxmargo.com'
@@ -84,14 +91,16 @@ export function RateAndContact({ profile }: { profile: PublicProfile }) {
 
   return (
     <>
-      {/* Rates always show. When the admin turns off "Show prices" (profile.showRates),
-          each price is replaced with a short invite to enquire — the deliverables stay. */}
+      {/* Rates section — hidden ENTIRELY when the admin turns off "Show Rates section"
+          (profile.showRatesSection). When shown but "Show prices" (profile.showRates) is
+          off, each price becomes a "Let's talk" invite and the deliverables stay. */}
+      {profile.showRatesSection !== false && (
       <section id="rates" className="rates">
         <div className="wrap">
           <div className="sec-head">
             <div>
-              <div className="label reveal">Rates</div>
-              <h2 className="display h2 reveal">Work, priced simply</h2>
+              <div className="label reveal">{ratesEyebrow}</div>
+              <h2 className="display h2 reveal">{ratesTitle}</h2>
             </div>
           </div>
           <div className="rate-list">
@@ -114,14 +123,15 @@ export function RateAndContact({ profile }: { profile: PublicProfile }) {
           </div>
         </div>
       </section>
+      )}
 
       {/* Contact */}
       <section id="contact" className="contact">
         <div className="wrap">
           <div className="contact-grid">
             <div>
-              <div className="label reveal">Collaborate</div>
-              <h2 className="display h2 reveal">Work with me</h2>
+              <div className="label reveal">{collaborateEyebrow}</div>
+              <h2 className="display h2 reveal">{collaborateTitle}</h2>
               <div className="contact-meta reveal">
                 <div className="cm-row">
                   <span className="label">Email</span>

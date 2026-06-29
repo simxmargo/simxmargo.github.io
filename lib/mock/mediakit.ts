@@ -29,6 +29,7 @@ export const mockProfile: PublicProfile = {
     { deliverable: 'Ambassadorship (monthly)', price: "let's talk", note: 'ongoing partnership' },
   ],
   showRates: true,
+  showRatesSection: true,
   pressLogos: [],
   seo: {
     title: 'simxmargo — Media Kit',

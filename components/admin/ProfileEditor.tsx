@@ -45,6 +45,7 @@ interface ProfileForm {
   ogImageUrl: string
   rateCard: RateCardItem[]
   showRates: boolean
+  showRatesSection: boolean
   isPublished: boolean
 }
 
@@ -63,6 +64,7 @@ const EMPTY_FORM: ProfileForm = {
   ogImageUrl: '',
   rateCard: [],
   showRates: true,
+  showRatesSection: true,
   isPublished: false,
 }
 
@@ -83,6 +85,7 @@ function toForm(p: ProfileResponse | null | undefined): ProfileForm {
     ogImageUrl: (p as { ogImageUrl?: string }).ogImageUrl ?? p.seo?.ogImageUrl ?? '',
     rateCard: Array.isArray(p.rateCard) ? p.rateCard : [],
     showRates: (p as { showRates?: boolean }).showRates !== false, // default true
+    showRatesSection: (p as { showRatesSection?: boolean }).showRatesSection !== false, // default true
     isPublished: Boolean(p.isPublished),
   }
 }
@@ -162,6 +165,7 @@ export function ProfileEditor() {
         ...(r.note?.trim() ? { note: r.note } : {}),
       })),
       showRates: form.showRates,
+      showRatesSection: form.showRatesSection,
       isPublished: form.isPublished,
     }
     try {
@@ -469,26 +473,54 @@ export function ProfileEditor() {
 
         {/* Rate card */}
         <section className="card">
-          <div className="flex items-start justify-between gap-4">
-            <div className="card-head" style={{ marginBottom: 0 }}>
-              <span className="ico-badge">
-                <Tag size={18} aria-hidden="true" />
-              </span>
-              <div>
-                <h2 className="card-title">Rate card</h2>
-                <p className="card-sub">When off, prices are hidden — each shows &ldquo;Let&rsquo;s talk&rdquo; to invite an enquiry (rates stay saved).</p>
-              </div>
+          <div className="card-head" style={{ marginBottom: 0 }}>
+            <span className="ico-badge">
+              <Tag size={18} aria-hidden="true" />
+            </span>
+            <div>
+              <h2 className="card-title">Rate card</h2>
+              <p className="card-sub">Two independent visibility controls for your public media kit.</p>
             </div>
-            <button
-              type="button"
-              role="switch"
-              aria-checked={form.showRates}
-              aria-label="Show prices on the public media kit"
-              onClick={() => update('showRates', !form.showRates)}
-              className="switch"
-            >
-              <span className="switch-knob" />
-            </button>
+          </div>
+
+          {/* Two orthogonal toggles: (1) whether the Rates section appears at all,
+              and (2) whether prices show inside it. (2) is moot when (1) is off, so
+              it dims + goes non-interactive then. */}
+          <div className="space-y-3" style={{ marginTop: 14 }}>
+            <div className="field-card">
+              <div>
+                <div className="fc-title">Show Rates section</div>
+                <div className="fc-sub">Off removes the whole &ldquo;Work, priced simply&rdquo; section (and its nav link) from your public page.</div>
+              </div>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={form.showRatesSection}
+                aria-label="Show the Rates section on the public media kit"
+                onClick={() => update('showRatesSection', !form.showRatesSection)}
+                className="switch"
+              >
+                <span className="switch-knob" />
+              </button>
+            </div>
+
+            <div className="field-card" style={form.showRatesSection ? undefined : { opacity: 0.5 }}>
+              <div>
+                <div className="fc-title">Show prices</div>
+                <div className="fc-sub">Off keeps the deliverables but swaps each price for &ldquo;Let&rsquo;s talk&rdquo; (rates stay saved).</div>
+              </div>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={form.showRates}
+                aria-disabled={!form.showRatesSection}
+                aria-label="Show prices on the public media kit"
+                onClick={() => form.showRatesSection && update('showRates', !form.showRates)}
+                className="switch"
+              >
+                <span className="switch-knob" />
+              </button>
+            </div>
           </div>
           <div className="flex items-center justify-end" style={{ marginTop: 12 }}>
             <button type="button" onClick={addRow} className="btn btn-ghost btn-sm">

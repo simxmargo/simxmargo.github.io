@@ -10,6 +10,7 @@
 // page load without a rebuild, and a failed/empty read leaves the snapshot intact.
 import { useEffect, useState } from 'react'
 import type { MediaKitData } from '@/lib/mediakit-types'
+import { DEFAULT_SITE_COPY } from '@/lib/mediakit-types'
 import { getMediaKitClient } from '@/lib/mediakit/clientData'
 import { RevealRoot } from '@/components/mediakit/RevealRoot'
 import { TopNav } from '@/components/mediakit/TopNav'
@@ -33,14 +34,18 @@ export function MediaKitLive({ initial }: { initial: MediaKitData }) {
   }, [])
 
   const { profile, socials, brands } = data
+  // PortfolioGrid doesn't take the whole profile, so resolve its editable copy here.
+  const c = profile.content ?? {}
+  const partnersEyebrow = c.partnersEyebrow?.trim() || DEFAULT_SITE_COPY.partnersEyebrow
+  const partnersTitle = c.partnersTitle?.trim() || DEFAULT_SITE_COPY.partnersTitle
 
   return (
     <>
       <RevealRoot />
-      <TopNav name={profile.displayName} />
+      <TopNav name={profile.displayName} showRates={profile.showRatesSection !== false} />
       <HeroSection profile={profile} socials={socials} />
       <SocialStatsStrip socials={socials} />
-      <PortfolioGrid brands={brands} socials={socials} />
+      <PortfolioGrid brands={brands} socials={socials} partnersEyebrow={partnersEyebrow} partnersTitle={partnersTitle} />
       <RateAndContact profile={profile} />
       <MediaKitFooter profile={profile} socials={socials} />
     </>

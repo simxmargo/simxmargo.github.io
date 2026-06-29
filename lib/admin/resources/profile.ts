@@ -64,9 +64,11 @@ function mapProfile(r: any): Omit<ProfileReadResult, 'metrics' | 'platforms'> {
     ogImageUrl: seo.og_image_url ?? '',
     rateCard: Array.isArray(r.rate_card) ? r.rate_card : [],
     showRates: r.show_rates !== false, // default true (column added in 0009)
+    showRatesSection: r.show_rates_section !== false, // default true (column added in 0011)
     pressLogos: Array.isArray(r.press_logos) ? r.press_logos : [],
     seo,
     theme: r.theme ?? {},
+    content: r.content ?? {},
     totalFollowers: r.total_followers ?? null,
     isPublished: Boolean(r.is_published),
   }
@@ -99,9 +101,11 @@ export interface ProfileReadResult {
   ogImageUrl: string
   rateCard: RateCardItem[]
   showRates: boolean
+  showRatesSection: boolean
   pressLogos: PressLogo[]
   seo: PublicProfile['seo']
   theme: NonNullable<PublicProfile['theme']>
+  content: NonNullable<PublicProfile['content']>
   totalFollowers: number | null
   isPublished: boolean
   metrics: ProfileMetrics
@@ -149,8 +153,10 @@ export interface ProfileSavePatch {
   totalFollowers?: number | null
   rateCard?: RateCardItem[]
   showRates?: boolean
+  showRatesSection?: boolean
   pressLogos?: PressLogo[]
   theme?: PublicProfile['theme']
+  content?: PublicProfile['content']
   isPublished?: boolean
   ogImageUrl?: string
   seo?: PublicProfile['seo']
@@ -174,7 +180,8 @@ export async function saveProfile(patch: ProfileSavePatch): Promise<void> {
     avatarUrl: 'avatar_url', heroImageUrl: 'hero_image_url', location: 'location', niche: 'niche',
     audience: 'audience', replyToEmail: 'reply_to_email', mailingAddress: 'mailing_address',
     mediaKitUrl: 'media_kit_url', totalFollowers: 'total_followers', rateCard: 'rate_card',
-    showRates: 'show_rates', pressLogos: 'press_logos', theme: 'theme', isPublished: 'is_published',
+    showRates: 'show_rates', showRatesSection: 'show_rates_section', pressLogos: 'press_logos',
+    theme: 'theme', isPublished: 'is_published',
   }
   for (const [camel, snake] of Object.entries(map)) {
     if (camel in b) updates[snake] = b[camel]
@@ -188,6 +195,15 @@ export async function saveProfile(patch: ProfileSavePatch): Promise<void> {
     updates.seo = { ...seo, og_image_url: b.ogImageUrl }
   } else if ('seo' in b) {
     updates.seo = b.seo
+  }
+
+  // `content` is a jsonb copy-map (footer headline, …) — shallow-merge so saving one
+  // slot never clobbers the others. Only the keys present in the patch overwrite their
+  // siblings; everything else on the row's content is preserved.
+  if ('content' in b) {
+    const cur = await sb.from('public_profile').select('content').eq('id', 1).maybeSingle()
+    const content = (cur.data?.content as Record<string, unknown>) ?? {}
+    updates.content = { ...content, ...((b.content as Record<string, unknown>) ?? {}) }
   }
 
   if (Object.keys(updates).length === 0) {

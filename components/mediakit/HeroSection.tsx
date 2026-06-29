@@ -1,7 +1,7 @@
 'use client'
 
 import type { PublicProfile, SocialStat } from '@/lib/mediakit-types'
-import { formatCount, totalReach } from '@/lib/mediakit-types'
+import { formatCount, totalReach, DEFAULT_SITE_COPY } from '@/lib/mediakit-types'
 import { Wordmark } from '@/components/mediakit/Wordmark'
 import { useCountUp } from '@/components/mediakit/useCountUp'
 
@@ -12,6 +12,9 @@ interface HeroSectionProps {
 
 export function HeroSection({ profile, socials }: HeroSectionProps) {
   const { value, ref } = useCountUp(totalReach(profile, socials))
+  // Editable CTA labels (admin → Content), each falling back to the shared default.
+  const ctaPrimary = profile.content?.heroCtaPrimary?.trim() || DEFAULT_SITE_COPY.heroCtaPrimary
+  const ctaSecondary = profile.content?.heroCtaSecondary?.trim() || DEFAULT_SITE_COPY.heroCtaSecondary
 
   // The avatar/portrait IS the hero image (a separate hero field was redundant).
   // Keep heroImageUrl as a fallback only so any legacy value still renders.
@@ -59,10 +62,10 @@ export function HeroSection({ profile, socials }: HeroSectionProps) {
           </div>
           <div className="cta-row reveal">
             <a href="#contact" className="btn btn-primary magnetic">
-              Work with me
+              {ctaPrimary}
             </a>
             <a href="#partners" className="btn btn-ghost magnetic">
-              See partners
+              {ctaSecondary}
             </a>
           </div>
         </div>
