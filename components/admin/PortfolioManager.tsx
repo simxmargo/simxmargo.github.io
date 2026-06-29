@@ -16,12 +16,15 @@ import {
 } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
 import { useAdminResource, adminKeys, AdminFetchError } from '@/lib/admin/queries'
+import { supabaseBrowser } from '@/lib/supabase/browser'
+import { fnErrorMessage } from '@/lib/admin/fnError'
 import { createBrand, updateBrand, deleteBrand, reorderBrands, type AdminBrand } from '@/lib/admin/resources/brands'
 import { ImageField } from '@/components/admin/ImageField'
 import { StudioImageSlot } from '@/components/admin/StudioImageSlot'
 import { PortfolioSkeleton } from '@/components/admin/Skeleton'
 import { formatCount, parseCompact, type PortfolioBrand } from '@/lib/mediakit-types'
 import { categoryKey, type CategoryKey } from '@/lib/mediakit/brandDetail'
+import { detectPostPlatform } from '@/lib/social/scrape'
 import { useDialog } from '@/lib/admin/useDialog'
 import { PullVideosModal } from '@/components/admin/PullVideosModal'
 
@@ -58,9 +61,6 @@ interface BrandForm {
   featured: boolean
   rowIndex: '' | 1 | 2 // '' = auto-split
   media: ContentDraft[]
-  startDate: string // ISO 'YYYY-MM-DD'; '' = hidden (~)
-  endDate: string // ISO 'YYYY-MM-DD'; '' = hidden (~)
-  totalViews: string // compact or raw; '' = hidden (~)
 }
 
 const EMPTY_FORM: BrandForm = {
@@ -73,9 +73,6 @@ const EMPTY_FORM: BrandForm = {
   featured: false,
   rowIndex: '',
   media: [],
-  startDate: '',
-  endDate: '',
-  totalViews: '',
 }
 
 // PortfolioBrand.media (BrandMedia[], numbers) → editor drafts (strings).
@@ -101,9 +98,6 @@ const editFormFromBrand = (b: AdminBrand): BrandForm => ({
   featured: b.featured,
   rowIndex: b.rowIndex === 1 || b.rowIndex === 2 ? b.rowIndex : '',
   media: toDrafts(b.media),
-  startDate: b.startDate ?? '',
-  endDate: b.endDate ?? '',
-  totalViews: typeof b.totalViews === 'number' ? String(b.totalViews) : '',
 })
 
 // Split the brands across the TWO carousel lanes EXACTLY like the public page
@@ -321,8 +315,6 @@ export function PortfolioManager() {
             )}
           </div>
         )}
-
-        <AddBrandByUrl />
 
         {q.isLoading ? (
           <PortfolioSkeleton />
@@ -569,6 +561,12 @@ function BrandEditorModal({
   const [form, setForm] = useState<BrandForm>(initial)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // "Auto-fill from URL" — only when ADDING (no id). Unifies the old separate
+  // "Add from URL" card into this one modal: scrape name+logo+website via the
+  // brand-meta Edge Function and fill the fields below for the admin to review.
+  const [url, setUrl] = useState('')
+  const [fetching, setFetching] = useState(false)
+  const [fetchError, setFetchError] = useState<string | null>(null)
   const set = <K extends keyof BrandForm>(k: K, v: BrandForm[K]) => setForm((f) => ({ ...f, [k]: v }))
   const addContent = () => setForm((f) => ({ ...f, media: [...f.media, { ...EMPTY_CONTENT }] }))
   const removeContent = (i: number) => setForm((f) => ({ ...f, media: f.media.filter((_, idx) => idx !== i) }))
@@ -576,11 +574,6 @@ function BrandEditorModal({
     setForm((f) => ({ ...f, media: f.media.map((m, idx) => (idx === i ? { ...m, ...patch } : m)) }))
   const panelRef = useRef<HTMLFormElement>(null)
   useDialog(panelRef, onCancel)
-
-  // Live echo of the typed total in the compact form the modal renders ("3.4M"),
-  // so the influencer can sanity-check it as they type. '' (blank) ⇒ hidden on the page.
-  const totalViewsParsed = parseCompact(form.totalViews)
-  const totalViewsPreview = totalViewsParsed != null ? formatCount(totalViewsParsed) : ''
 
   async function save(e: React.FormEvent) {
     e.preventDefault()
@@ -598,6 +591,41 @@ function BrandEditorModal({
       setError(err instanceof Error ? err.message : 'Save failed.')
     } finally {
       setSaving(false)
+    }
+  }
+
+  // Scrape the pasted URL → fill ONLY the fields it found (never blanks a value the
+  // admin already typed). type="button" so it can't submit the form.
+  async function fetchMeta() {
+    const sb = supabaseBrowser
+    if (!sb) {
+      setFetchError('Studio is not configured.')
+      return
+    }
+    const u = url.trim()
+    if (!u) {
+      setFetchError('Paste a brand’s website first.')
+      return
+    }
+    setFetching(true)
+    setFetchError(null)
+    try {
+      const { data, error: invokeErr } = await sb.functions.invoke('brand-meta', { body: { url: u } })
+      if (invokeErr) {
+        setFetchError(await fnErrorMessage(invokeErr, 'Could not read that site.'))
+        return
+      }
+      setForm((f) => ({
+        ...f,
+        brand: typeof data?.brand === 'string' && data.brand ? data.brand : f.brand,
+        website: typeof data?.website === 'string' && data.website ? data.website : f.website,
+        logoUrl: typeof data?.logoUrl === 'string' && data.logoUrl ? data.logoUrl : f.logoUrl,
+        blurb: typeof data?.blurb === 'string' && data.blurb ? data.blurb : f.blurb,
+      }))
+    } catch (err) {
+      setFetchError(err instanceof Error ? err.message : 'Could not read that site.')
+    } finally {
+      setFetching(false)
     }
   }
 
@@ -628,6 +656,47 @@ function BrandEditorModal({
               <span>{error}</span>
             </div>
           )}
+
+          {/* Add-only: paste a URL to auto-fill name + logo, then review the fields
+              below. Editing an existing brand skips this (no re-scrape). */}
+          {!form.id && (
+            <div className="field">
+              <label className="flabel" htmlFor="brand-from-url">
+                <Link2 size={13} aria-hidden="true" style={{ verticalAlign: '-2px', marginRight: 5 }} />
+                Auto-fill from the brand’s website
+              </label>
+              <div className="flex items-center gap-2">
+                <input
+                  id="brand-from-url"
+                  type="url"
+                  placeholder="https://brand.com"
+                  className="input flex-1"
+                  value={url}
+                  onChange={(e) => setUrl(e.target.value)}
+                  disabled={fetching}
+                />
+                <button
+                  type="button"
+                  className="btn btn-ghost"
+                  disabled={fetching || !url.trim()}
+                  onClick={() => void fetchMeta()}
+                >
+                  {fetching ? (
+                    <Loader2 size={16} className="animate-spin" aria-hidden="true" />
+                  ) : (
+                    <RefreshCw size={16} aria-hidden="true" />
+                  )}{' '}
+                  {fetching ? 'Fetching…' : 'Fetch'}
+                </button>
+              </div>
+              {fetchError ? (
+                <p className="field-hint" style={{ color: 'var(--accent)' }}>{fetchError}</p>
+              ) : (
+                <p className="field-hint">Pulls the name &amp; logo so you can review below — or just fill it in by hand.</p>
+              )}
+            </div>
+          )}
+
           <div className="grid2">
             <div className="field">
               <label className="flabel" htmlFor="brand-name">Brand *</label>
@@ -673,55 +742,6 @@ function BrandEditorModal({
             <input id="brand-campaign" className="input" placeholder="e.g. Holiday 2025 partnership" value={form.campaignTitle} onChange={(e) => set('campaignTitle', e.target.value)} />
           </div>
 
-          {/* Campaign stats shown in this brand's public modal (Start / End / Total
-              views). All optional — leave any blank to show a quiet "~" on the page. */}
-          <div className="grid2">
-            <div className="field">
-              <label className="flabel" htmlFor="brand-start">Start date</label>
-              <input
-                id="brand-start"
-                type="date"
-                className="input"
-                value={form.startDate}
-                onChange={(e) => set('startDate', e.target.value)}
-              />
-              <span className="field-hint">Leave blank to hide.</span>
-            </div>
-            <div className="field">
-              <label className="flabel" htmlFor="brand-end">End date</label>
-              <input
-                id="brand-end"
-                type="date"
-                className="input"
-                value={form.endDate}
-                onChange={(e) => set('endDate', e.target.value)}
-              />
-              <span className="field-hint">Leave blank to hide.</span>
-            </div>
-          </div>
-
-          <div className="field">
-            <label className="flabel" htmlFor="brand-total-views">Total views</label>
-            <input
-              id="brand-total-views"
-              type="text"
-              inputMode="numeric"
-              className="input"
-              placeholder="e.g. 3.4M or 3400000"
-              value={form.totalViews}
-              onChange={(e) => set('totalViews', e.target.value)}
-            />
-            <span className="field-hint">
-              Campaign-wide total. Leave blank to hide.
-              {totalViewsPreview && (
-                <>
-                  {' '}
-                  · shows as <strong>{totalViewsPreview}</strong>
-                </>
-              )}
-            </span>
-          </div>
-
           <div className="field-card">
             <div>
               <div className="fc-title">Featured on the media kit</div>
@@ -746,7 +766,7 @@ function BrandEditorModal({
               <div>
                 <h3 className="card-title" style={{ fontSize: 16 }}>Top content</h3>
                 <p className="field-hint" style={{ marginTop: 2 }}>
-                  Reels shown in this brand&rsquo;s modal. Paste a link, then enter the view &amp; like counts.
+                  Reels shown in this brand&rsquo;s modal. Paste a TikTok or Instagram link and the cover, caption &amp; counts fill in automatically.
                 </p>
               </div>
             </div>
@@ -787,50 +807,13 @@ function BrandEditorModal({
   )
 }
 
-// "Add from URL" — TEMPORARILY DISABLED (Supabase SPA migration). This card used to
-// POST /api/admin/scrape-meta to prefill the editor from a brand's site, but that
-// scrape endpoint is being removed. The control is shown disabled with a note; the
-// MANUAL "Add brand" flow (header button → empty editor) is unaffected. Re-enable by
-// restoring the fetchMeta/scrape-meta flow + the `onDraft` prop from git history.
-function AddBrandByUrl() {
-  const [url, setUrl] = useState('')
-
-  return (
-    <form onSubmit={(e) => e.preventDefault()} className="card">
-      <div className="card-head">
-        <span className="ico-badge"><Link2 size={18} aria-hidden="true" /></span>
-        <h2 className="card-title">Add from URL</h2>
-      </div>
-      <div className="card-body" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-        <div className="flex items-center gap-2">
-          <input
-            id="brand-from-url"
-            type="url"
-            placeholder="https://brand.com"
-            className="input flex-1"
-            value={url}
-            onChange={(e) => setUrl(e.target.value)}
-            disabled
-          />
-          <button type="submit" disabled className="btn btn-primary">
-            <RefreshCw size={16} aria-hidden="true" /> Fetch
-          </button>
-        </div>
-        <p className="field-hint">
-          Auto-fetch is temporarily off — use <strong>Add brand</strong> above and paste the brand&rsquo;s logo
-          URL manually.
-        </p>
-      </div>
-    </form>
-  )
-}
-
-// One "Top content" reel row: a 9:16 cover (upload via the shared StudioImageSlot),
-// the post URL, caption, and manual view/like counts. The per-row "Fetch" auto-pull
-// (POST /api/admin/brands/fetch-post) is TEMPORARILY DISABLED (Supabase SPA migration)
-// — that scrape endpoint is being removed, so everything here is entered by hand. The
-// cover upload now flows through StudioImageSlot (the shared, owned upload component),
-// not a direct adminFetch.
+// One "Top content" reel row: a 9:16 cover, the post URL, caption, and view/like counts.
+// Paste (or blur) a TikTok/Instagram link → the whole card enters a loading state and the
+// `fetch-post` Edge Function auto-fills the cover (re-hosted), caption, views and likes via
+// ScrapeCreators. Auto-fill is a CONVENIENCE: every field stays editable, and if the fetch
+// fails (function not deployed / private post / out of credits) the row degrades to manual
+// entry. Each field is only overwritten when the fetch returns a value, so manual edits
+// survive a partial fetch.
 function ContentRow({
   draft,
   onChange,
@@ -840,8 +823,15 @@ function ContentRow({
   onChange: (patch: Partial<ContentDraft>) => void
   onRemove: () => void
 }) {
-  // Live echo of the typed counts in the compact form the cards render ("1.8M"),
-  // so the influencer can sanity-check the formatting as they type.
+  const [fetching, setFetching] = useState(false)
+  const [fetchError, setFetchError] = useState<string | null>(null)
+  const [filled, setFilled] = useState(false)
+  // The last URL we successfully fetched — so blur doesn't re-spend a credit on a link we
+  // already pulled (a manual re-fetch via the button bypasses this).
+  const fetchedUrl = useRef('')
+
+  // Live echo of the counts in the compact form the cards render ("1.8M"), so the counts
+  // can be sanity-checked whether auto-filled or typed.
   const preview = (raw: string): string => {
     const n = parseCompact(raw)
     return n != null ? formatCount(n) : ''
@@ -849,8 +839,57 @@ function ContentRow({
   const viewsPreview = preview(draft.views)
   const likesPreview = preview(draft.likes)
 
+  const isSupported = !!detectPostPlatform(draft.url.trim())
+
+  async function runFetch(rawUrl: string, force = false) {
+    const sb = supabaseBrowser
+    const u = rawUrl.trim()
+    const platform = detectPostPlatform(u)
+    if (!sb || !platform || fetching) return
+    if (!force && u === fetchedUrl.current) return // already pulled this exact link
+
+    setFetching(true)
+    setFetchError(null)
+    setFilled(false)
+    try {
+      const { data, error: invokeErr } = await sb.functions.invoke('fetch-post', { body: { url: u } })
+      if (invokeErr) {
+        setFetchError(await fnErrorMessage(invokeErr, 'Couldn’t auto-fill from that link.'))
+        return
+      }
+      fetchedUrl.current = u
+      // Partial-fill: only overwrite a field when the fetch actually returned a value, so a
+      // manually-entered caption/count isn't wiped by a sparse response. Platform is derived.
+      onChange({
+        platform: data?.platform === 'tiktok' || data?.platform === 'instagram' ? data.platform : platform,
+        ...(typeof data?.thumbUrl === 'string' && data.thumbUrl ? { thumbUrl: data.thumbUrl } : {}),
+        ...(typeof data?.caption === 'string' && data.caption ? { caption: data.caption } : {}),
+        ...(data?.views != null ? { views: String(data.views) } : {}),
+        ...(data?.likes != null ? { likes: String(data.likes) } : {}),
+      })
+      setFilled(true)
+    } catch (err) {
+      setFetchError(err instanceof Error ? err.message : 'Couldn’t auto-fill from that link.')
+    } finally {
+      setFetching(false)
+    }
+  }
+
   return (
-    <div className="content-row">
+    <div className="content-row" style={{ position: 'relative' }}>
+      {fetching && (
+        <div
+          aria-live="polite"
+          style={{
+            position: 'absolute', inset: 0, zIndex: 3, borderRadius: 12,
+            display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10,
+            background: 'rgba(20,18,16,0.74)', color: 'var(--ink)', fontSize: 14, fontWeight: 600,
+          }}
+        >
+          <Loader2 size={18} className="animate-spin" aria-hidden="true" /> Fetching details…
+        </div>
+      )}
+
       <StudioImageSlot
         value={draft.thumbUrl}
         onChange={(url) => onChange({ thumbUrl: url })}
@@ -861,12 +900,37 @@ function ContentRow({
         ariaLabel="Upload a cover image"
       />
       <div className="content-fields">
-        <input
-          className="input"
-          placeholder="https://www.tiktok.com/@… or instagram.com/reel/…"
-          value={draft.url}
-          onChange={(e) => onChange({ url: e.target.value })}
-        />
+        {/* URL is the trigger: paste or blur a TikTok/IG link → auto-fill. The button is a
+            manual fetch / retry (bypasses the already-fetched guard). */}
+        <div style={{ display: 'flex', gap: 8 }}>
+          <input
+            className="input"
+            style={{ flex: 1, minWidth: 0 }}
+            placeholder="Paste a TikTok or Instagram link…"
+            value={draft.url}
+            disabled={fetching}
+            onChange={(e) => onChange({ url: e.target.value })}
+            onBlur={() => void runFetch(draft.url)}
+            onPaste={(e) => {
+              const pasted = e.clipboardData.getData('text').trim()
+              if (detectPostPlatform(pasted)) {
+                e.preventDefault()
+                onChange({ url: pasted })
+                void runFetch(pasted)
+              }
+            }}
+          />
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm"
+            onClick={() => void runFetch(draft.url, true)}
+            disabled={!isSupported || fetching}
+            title={isSupported ? 'Fetch details from this link' : 'Paste a TikTok or Instagram link first'}
+            aria-label="Fetch details from this link"
+          >
+            {fetching ? <Loader2 size={14} className="animate-spin" aria-hidden="true" /> : <RefreshCw size={14} aria-hidden="true" />}
+          </button>
+        </div>
         <input className="input" placeholder="Caption" value={draft.caption} onChange={(e) => onChange({ caption: e.target.value })} />
         <div className="content-stats">
           <input className="input" type="text" placeholder="Views (e.g. 1.8M)" value={draft.views} onChange={(e) => onChange({ views: e.target.value })} />
@@ -880,7 +944,23 @@ function ContentRow({
             {likesPreview && `${likesPreview} likes`}
           </span>
         )}
-        <span className="field-hint">Auto-fetch is temporarily off — paste the link, cover &amp; counts manually.</span>
+        {/* Status line: error (with retry) → success → the default "paste a link" prompt. */}
+        {fetchError ? (
+          <span className="field-hint" style={{ color: 'var(--danger)' }}>
+            {fetchError}{' '}
+            <button
+              type="button"
+              onClick={() => void runFetch(draft.url, true)}
+              style={{ background: 'none', border: 'none', padding: 0, color: 'var(--accent)', cursor: 'pointer', font: 'inherit', textDecoration: 'underline' }}
+            >
+              Retry
+            </button>
+          </span>
+        ) : filled ? (
+          <span className="field-hint" style={{ color: 'var(--accent)' }}>Auto-filled from the link — edit anything below.</span>
+        ) : (
+          <span className="field-hint">Paste a TikTok or Instagram link — cover, caption &amp; counts fill in automatically.</span>
+        )}
       </div>
       <button type="button" className="content-x" aria-label="Remove this content" onClick={onRemove}>
         <X size={14} aria-hidden="true" />

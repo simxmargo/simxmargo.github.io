@@ -123,17 +123,6 @@ function fmt(n: number): string {
   return String(n)
 }
 
-// A date column ('YYYY-MM-DD') → 'MM/DD/YY' for the modal. Parsed from the string
-// parts (NOT `new Date()`) so it's timezone-safe. Blank/malformed ⇒ '' (caller
-// substitutes the "~" empty state).
-function fmtDate(iso: string | null | undefined): string {
-  if (!iso) return ''
-  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso.trim())
-  if (!m) return ''
-  const [, y, mo, d] = m
-  return `${mo}/${d}/${y.slice(2)}`
-}
-
 // The single quiet empty state shared by every modal stat (no "N/A", no fake value).
 const DASH = '~'
 
@@ -183,18 +172,14 @@ export function buildBrandDetail(brand: PortfolioBrand): BrandDetailVM {
   const key = curated?.cat ?? categoryKey(brand.category)
   const type = curated?.type ?? brand.campaignTitle ?? ''
 
-  // The stats. START / END read the per-brand campaign columns; DELIVERABLES, AVG VIEWS
-  // and AVG LIKES are DERIVED from the same top-content pieces (so they always agree with
-  // the cards). Any value with no data ⇒ a quiet "~" (empty:true → dimmed), never "N/A".
-  const start = fmtDate(brand.startDate)
-  const end = fmtDate(brand.endDate)
+  // The stats. DELIVERABLES, AVG VIEWS and AVG LIKES are all DERIVED from the same
+  // top-content pieces (so they always agree with the cards). Any value with no data
+  // ⇒ a quiet "~" (empty:true → dimmed), never "N/A".
   const pieces = items.length
   const avgViews = averageMetric(items, 'views')
   const avgLikes = averageMetric(items, 'likes')
 
   const metaCells: MetaCell[] = [
-    { label: 'Start', value: start || DASH, empty: !start },
-    { label: 'End', value: end || DASH, empty: !end },
     {
       label: 'Deliverables',
       value: pieces ? `${pieces} ${pieces === 1 ? 'piece' : 'pieces'}` : DASH,
