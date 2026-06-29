@@ -231,14 +231,26 @@ export function SocialStatsEditor() {
                     <label htmlFor={`${row.platform}-handle`} className="flabel">
                       Handle
                     </label>
-                    <input
-                      id={`${row.platform}-handle`}
-                      type="text"
-                      className="input"
-                      value={row.handle}
-                      onChange={(e) => patchRow(row.platform, { handle: e.target.value })}
-                      placeholder="@username"
-                    />
+                    {/* "@" shown as a fixed prefix so every platform reads "@handle"
+                        the same way; the value is stored BARE (the @ is stripped on
+                        input + again on save), so TikTok/Instagram can't drift apart. */}
+                    <div style={{ position: 'relative' }}>
+                      <span
+                        aria-hidden="true"
+                        style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', opacity: 0.5, pointerEvents: 'none' }}
+                      >
+                        @
+                      </span>
+                      <input
+                        id={`${row.platform}-handle`}
+                        type="text"
+                        className="input"
+                        style={{ paddingLeft: 26 }}
+                        value={row.handle.replace(/^@+/, '')}
+                        onChange={(e) => patchRow(row.platform, { handle: e.target.value.replace(/^@+/, '') })}
+                        placeholder="username"
+                      />
+                    </div>
                   </div>
 
                   {/* Followers — the focal metric + the per-platform fetch affordance. */}

@@ -74,7 +74,12 @@ export async function saveSocial(idOrPlatform: string, patch: SocialSavePatch): 
   const b = patch as Record<string, unknown>
   const updates: Record<string, unknown> = {}
 
-  if ('handle' in b) updates.handle = b.handle
+  // Store handles CANONICALLY — bare, no leading "@" — so the data is consistent
+  // across platforms (TikTok vs Instagram used to differ). The public UI re-adds the
+  // "@" at render time (PortfolioGrid), and the URL/scrape helpers strip it anyway.
+  if ('handle' in b) {
+    updates.handle = typeof b.handle === 'string' ? b.handle.replace(/^@+/, '').trim() : b.handle
+  }
   if ('profileUrl' in b) updates.profile_url = b.profileUrl
   if ('followers' in b) {
     updates.followers = b.followers === null ? null : Math.trunc(Number(b.followers))
