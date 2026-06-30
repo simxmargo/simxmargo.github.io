@@ -101,10 +101,12 @@ async function liveData() {
       .slice(0, 3)
     const tokens = [profile.location, ...nicheTokens].map((t) => String(t || '').trim()).filter(Boolean)
 
-    // The uploaded "Social share image" lives in seo.ogImageUrl; avatar is the fallback.
+    // The uploaded "Social share image" lives in seo.og_image_url (snake — the key the
+    // app writes/reads); avatar is the fallback. (Previously read the camelCase key by
+    // mistake and always fell back to the avatar.)
     const seo = profile.seo || {}
     const theme = profile.theme || {}
-    const photo = await fetchImageDataUri(seo.ogImageUrl || profile.avatar_url || '')
+    const photo = await fetchImageDataUri(seo.og_image_url || profile.avatar_url || '')
 
     return {
       name: profile.display_name || 'simxmargo',
