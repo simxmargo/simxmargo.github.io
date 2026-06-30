@@ -24,13 +24,15 @@ export async function generateMetadata(): Promise<Metadata> {
       description,
       url: '/',
       type: 'website',
-      // Static export carves out app/opengraph-image.tsx, so the page declares the
-      // OG card itself (public/og.png, regenerated from live data each deploy). The
-      // ?v=<sha> cache-buster makes Discord/social re-fetch the new card (they cache
-      // by URL). Locally the dynamic route auto-injects the tag — gating on
-      // EXPORT_STATIC prevents emitting duplicate og:image tags.
-      ...(process.env.EXPORT_STATIC === '1'
-        ? { images: [`/og.png?v=${(process.env.OG_VERSION || 'dev').slice(0, 8)}`] }
+      // Static export carves out app/opengraph-image.tsx, so the page declares the OG
+      // card here. It points at a STABLE Supabase Storage URL (media/og/card.png) that
+      // the admin re-renders + overwrites on save (lib/og/shareCard.ts) — so the share
+      // card can change WITHOUT a redeploy. The URL is deliberately version-free (a
+      // ?v=<sha> would re-tie it to the deploy); freshness comes from the object's own
+      // short cache-control. Locally the dynamic route injects the tag, so we only emit
+      // this in the static export to avoid a duplicate.
+      ...(process.env.EXPORT_STATIC === '1' && process.env.NEXT_PUBLIC_SUPABASE_URL
+        ? { images: [`${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/media/og/card.png`] }
         : {}),
     },
   }

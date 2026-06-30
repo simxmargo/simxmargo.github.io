@@ -8,6 +8,8 @@ import {
   CheckCircle2,
   AlertTriangle,
   RotateCcw,
+  RefreshCw,
+  Loader2,
   UserCircle,
   Tag,
   Send,
@@ -15,6 +17,7 @@ import {
 } from 'lucide-react'
 import { useQueryClient } from '@tanstack/react-query'
 import { saveProfile } from '@/lib/admin/resources/profile'
+import { regenerateShareCard } from '@/lib/og/shareCard'
 import { useAdminResource, adminKeys, type AdminFetchError } from '@/lib/admin/queries'
 import { ImageField } from '@/components/admin/ImageField'
 import { FormSkeleton } from '@/components/admin/Skeleton'
@@ -104,6 +107,10 @@ export function ProfileEditor() {
   const [form, setForm] = useState<ProfileForm>(EMPTY_FORM)
   const [save, setSave] = useState<SaveState>('idle')
   const [saveError, setSaveError] = useState('')
+  // Share-card (og:image) regeneration status — kept SEPARATE from the profile save so
+  // a card failure never blocks (or masks) a successful profile save.
+  const [card, setCard] = useState<'idle' | 'working' | 'done' | 'error'>('idle')
+  const [cardError, setCardError] = useState<string | null>(null)
   // The media kit URL is just this site's root — read it on the client (avoids a
   // hydration mismatch) rather than asking the user to type it.
   const [siteRoot, setSiteRoot] = useState('')
@@ -141,6 +148,20 @@ export function ProfileEditor() {
     if (save !== 'idle') setSave('idle')
   }
 
+  // Re-render the OG share card from live data → media/og/card.png (the stable URL
+  // og:image points at). Decoupled from the deploy, so the card changes on save.
+  async function runRegen() {
+    setCard('working')
+    setCardError(null)
+    const r = await regenerateShareCard()
+    if (r.ok) {
+      setCard('done')
+    } else {
+      setCard('error')
+      setCardError(r.error)
+    }
+  }
+
   async function onSubmit(e: FormEvent) {
     e.preventDefault()
     setSave('saving')
@@ -174,6 +195,9 @@ export function ProfileEditor() {
       // Refresh the shared cache so ThemeEditor + any other reader (and the next
       // visit to this tab) see the saved values.
       void qc.invalidateQueries({ queryKey: adminKeys.profile })
+      // The share card mirrors saved profile data — refresh it (non-blocking; its own
+      // status is shown by the "Update share card" control, not the Save button).
+      void runRegen()
     } catch (e) {
       setSaveError(e instanceof Error ? e.message : 'Couldn’t reach the server. Try again.')
       setSave('error')
@@ -331,8 +355,37 @@ export function ProfileEditor() {
               value={form.ogImageUrl}
               onChange={(url) => update('ogImageUrl', url)}
               folder="og"
-              hint="The photo behind your auto-generated share card (your name + total reach are overlaid on top). It's baked in on the next deploy — and social platforms cache the old one, so re-shares can lag."
+              hint="The photo behind your auto-generated share card (your name + total reach are overlaid). It updates when you Save — or use “Update share card” below. Social platforms still cache the old one, so re-shares can lag."
             />
+          </div>
+
+          {/* The share card is re-rendered from live data and uploaded to a stable
+              Storage URL whenever you save; this refreshes it on demand — e.g. after a
+              social-stats change, or to seed it the first time — without a full save. */}
+          <div className="field" style={{ marginTop: 14 }}>
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              onClick={() => void runRegen()}
+              disabled={card === 'working'}
+            >
+              {card === 'working' ? (
+                <Loader2 size={14} className="animate-spin" aria-hidden="true" />
+              ) : (
+                <RefreshCw size={14} aria-hidden="true" />
+              )}{' '}
+              {card === 'working' ? 'Updating share card…' : 'Update share card'}
+            </button>
+            {card === 'done' && (
+              <p className="field-hint" style={{ color: 'var(--accent)', marginTop: 8 }}>
+                <CheckCircle2 size={13} aria-hidden="true" style={{ verticalAlign: '-2px' }} /> Share card updated. Re-shares may lag while social platforms refresh their cache.
+              </p>
+            )}
+            {card === 'error' && cardError && (
+              <p className="field-hint" style={{ color: 'var(--danger)', marginTop: 8 }}>
+                Couldn’t update the share card: {cardError}
+              </p>
+            )}
           </div>
         </section>
 
