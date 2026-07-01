@@ -8,8 +8,6 @@ import {
   CheckCircle2,
   AlertTriangle,
   RotateCcw,
-  RefreshCw,
-  Loader2,
   UserCircle,
   Tag,
   Send,
@@ -244,6 +242,14 @@ export function ProfileEditor() {
   }
 
   const metrics = q.data?.metrics
+  // Live preview of the hero meta label: your location + the first three niche tokens,
+  // exactly as the public hero renders them (mirrors the removed Hero tab's preview).
+  const nicheLabelPreview = [
+    form.location.trim(),
+    ...form.niche.split('·').map((t) => t.trim()).filter(Boolean).slice(0, 3),
+  ]
+    .filter(Boolean)
+    .join('  ·  ')
 
   return (
     <form onSubmit={onSubmit}>
@@ -299,6 +305,10 @@ export function ProfileEditor() {
                 className="input"
                 placeholder="Fashion & lifestyle"
               />
+              <span className="field-hint">
+                Separate items with &ldquo;·&rdquo;. Shows above your name as{' '}
+                <span className="label" style={{ opacity: 0.85 }}>{nicheLabelPreview || 'your niche'}</span>
+              </span>
             </div>
 
             <div className="field col-span">
@@ -355,38 +365,18 @@ export function ProfileEditor() {
               value={form.ogImageUrl}
               onChange={(url) => update('ogImageUrl', url)}
               folder="og"
-              hint="The photo behind your auto-generated share card (your name + total reach are overlaid). It updates when you Save — or use “Update share card” below. Social platforms still cache the old one, so re-shares can lag."
+              hint="The photo behind your link preview — the card shown when your kit link is shared (your name + total reach are overlaid). It refreshes when you Save. Social platforms cache the old one, so a re-shared link can lag until they refresh it."
             />
           </div>
 
-          {/* The share card is re-rendered from live data and uploaded to a stable
-              Storage URL whenever you save; this refreshes it on demand — e.g. after a
-              social-stats change, or to seed it the first time — without a full save. */}
-          <div className="field" style={{ marginTop: 14 }}>
-            <button
-              type="button"
-              className="btn btn-ghost btn-sm"
-              onClick={() => void runRegen()}
-              disabled={card === 'working'}
-            >
-              {card === 'working' ? (
-                <Loader2 size={14} className="animate-spin" aria-hidden="true" />
-              ) : (
-                <RefreshCw size={14} aria-hidden="true" />
-              )}{' '}
-              {card === 'working' ? 'Updating share card…' : 'Update share card'}
-            </button>
-            {card === 'done' && (
-              <p className="field-hint" style={{ color: 'var(--accent)', marginTop: 8 }}>
-                <CheckCircle2 size={13} aria-hidden="true" style={{ verticalAlign: '-2px' }} /> Share card updated. Re-shares may lag while social platforms refresh their cache.
-              </p>
-            )}
-            {card === 'error' && cardError && (
-              <p className="field-hint" style={{ color: 'var(--danger)', marginTop: 8 }}>
-                Couldn’t update the share card: {cardError}
-              </p>
-            )}
-          </div>
+          {/* The link preview is re-rendered from live data and overwritten on Save
+              (onSubmit → runRegen) — saving is the single action, no separate button.
+              Only a failure surfaces here; success is implied by the Save confirmation. */}
+          {card === 'error' && cardError && (
+            <p className="field-hint" style={{ color: 'var(--danger)', marginTop: 12 }}>
+              <AlertTriangle size={13} aria-hidden="true" style={{ verticalAlign: '-2px' }} /> Couldn’t refresh the link preview ({cardError}) — it’ll retry next time you Save.
+            </p>
+          )}
         </section>
 
         {/* Creator profile — outreach identity (moved here from Settings) */}
