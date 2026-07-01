@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { Users, Send, Settings as Cog, UserCircle, LayoutGrid, BarChart3, Inbox, Palette, Type, Sparkles } from 'lucide-react'
+import { Users, Send, Settings as Cog, UserCircle, LayoutGrid, BarChart3, Inbox, Palette, Type } from 'lucide-react'
 import { useStore } from '@/lib/store'
 import { AdminQueryProvider } from '@/components/admin/AdminQueryProvider'
 import { useAdminResource } from '@/lib/admin/queries'
@@ -11,7 +11,6 @@ import { ContactsPage } from '@/components/pages/ContactsPage'
 import { QueuePage } from '@/components/pages/QueuePage'
 import { SettingsPage } from '@/components/pages/SettingsPage'
 import { ProfileEditor } from '@/components/admin/ProfileEditor'
-import { HeroEditor } from '@/components/admin/HeroEditor'
 import { ContentEditor } from '@/components/admin/ContentEditor'
 import { PortfolioManager } from '@/components/admin/PortfolioManager'
 import { SocialStatsEditor } from '@/components/admin/SocialStatsEditor'
@@ -20,14 +19,13 @@ import { ThemeEditor } from '@/components/admin/ThemeEditor'
 import { SidebarBrand } from '@/components/admin/SidebarBrand'
 import { signOutAdmin } from '@/lib/admin/auth'
 
-type Panel = 'profile' | 'hero' | 'portfolio' | 'social' | 'inquiries' | 'theme' | 'content' | 'contacts' | 'queue' | 'settings'
+type Panel = 'profile' | 'portfolio' | 'social' | 'inquiries' | 'theme' | 'content' | 'contacts' | 'queue' | 'settings'
 
 const GROUPS = [
   {
     label: 'Media Kit',
     items: [
       { key: 'profile', label: 'Profile', icon: UserCircle },
-      { key: 'hero', label: 'Hero', icon: Sparkles },
       { key: 'portfolio', label: 'Portfolio', icon: LayoutGrid },
       { key: 'social', label: 'Social Stats', icon: BarChart3 },
       { key: 'inquiries', label: 'Inquiries', icon: Inbox },
@@ -128,7 +126,6 @@ function StudioShell() {
 
       <main className="main">
         {panel === 'profile' && <ProfileEditor />}
-        {panel === 'hero' && <HeroEditor />}
         {panel === 'portfolio' && <PortfolioManager />}
         {panel === 'social' && <SocialStatsEditor />}
         {panel === 'inquiries' && <InquiriesInbox />}

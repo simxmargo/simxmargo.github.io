@@ -17,8 +17,7 @@ export function HeroSection({ profile, socials }: HeroSectionProps) {
   const ctaSecondary = profile.content?.heroCtaSecondary?.trim() || DEFAULT_SITE_COPY.heroCtaSecondary
 
   // The avatar/portrait IS the hero image (a separate hero field was redundant).
-  // Keep heroImageUrl as a fallback only so any legacy value still renders.
-  const photo = profile.avatarUrl || profile.heroImageUrl
+  const photo = profile.avatarUrl
 
   // Split ONLY on the bullet so multi-word labels survive intact — e.g. "Manila, PH"
   // keeps its comma and "Fashion & Styling" keeps its ampersand (matches the design's
