@@ -37,7 +37,15 @@ export interface PublicProfile {
   seo: { title?: string; description?: string; ogImageUrl?: string }
   // Editable from the admin Theme editor; applied as CSS vars on the public page.
   // recentAccents = the last few saved accent colours (newest first), for quick re-pick.
-  theme?: { accent?: string; tileTheme?: 'light' | 'dark'; recentAccents?: string[] }
+  // accent = fills; accentInk = on-accent button label (auto black/white when unset);
+  // accentText = accent used as text (auto-lightened when unset). See lib/theme/contrast.
+  theme?: {
+    accent?: string
+    tileTheme?: 'light' | 'dark'
+    recentAccents?: string[]
+    accentInk?: string
+    accentText?: string
+  }
   // Editable marketing copy for otherwise-hardcoded strings (the footer headline, …).
   // Stored as a jsonb map on public_profile.content; any missing key falls back to
   // DEFAULT_SITE_COPY at render time, so the kit never shows a blank string.

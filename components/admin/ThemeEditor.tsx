@@ -6,10 +6,26 @@ import { CheckCircle2, AlertTriangle, RotateCcw, Palette, Eye } from 'lucide-rea
 import { saveProfile } from '@/lib/admin/resources/profile'
 import { useAdminResource, adminKeys, AdminFetchError } from '@/lib/admin/queries'
 import type { PublicProfile } from '@/lib/mediakit-types'
+import { onAccentInk, readableAccentText, contrastRatio, contrastLabel, PAGE_BG, AA_TEXT } from '@/lib/theme/contrast'
 import { FormSkeleton } from '@/components/admin/Skeleton'
 
 // Accent presets: the active brand red first, then the design's original 5 options.
 const PRESETS = ['#e33b3b', '#e0694b', '#c89b3c', '#b6485f', '#6f7d5a', '#8a6fc4']
+
+const isHex6 = (s: string) => /^#[0-9a-fA-F]{6}$/.test(s)
+
+// Live WCAG contrast badge — green ✓ AA at ≥4.5:1, accent warning below.
+function Badge({ ratio }: { ratio: number }) {
+  const { text, pass } = contrastLabel(ratio)
+  return (
+    <span
+      style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11.5, fontWeight: 600, color: pass ? '#57a97b' : '#e0694b' }}
+    >
+      {pass ? <CheckCircle2 size={12} aria-hidden="true" /> : <AlertTriangle size={12} aria-hidden="true" />}
+      {text} {pass ? 'AA' : 'low'}
+    </span>
+  )
+}
 
 type SaveState = 'idle' | 'saving' | 'saved' | 'error' | 'config-missing'
 
@@ -19,6 +35,8 @@ export function ThemeEditor() {
   const [accent, setAccent] = useState('#e33b3b')
   const [tileTheme, setTileTheme] = useState<'light' | 'dark'>('light')
   const [recentAccents, setRecentAccents] = useState<string[]>([])
+  const [accentInk, setAccentInk] = useState('') // '' = Auto (derive from accent)
+  const [accentText, setAccentText] = useState('') // '' = Auto (readable accent)
   const [save, setSave] = useState<SaveState>('idle')
   const [err, setErr] = useState('')
 
@@ -31,6 +49,8 @@ export function ThemeEditor() {
     if (p.theme?.accent) setAccent(p.theme.accent)
     if (p.theme?.tileTheme) setTileTheme(p.theme.tileTheme)
     if (Array.isArray(p.theme?.recentAccents)) setRecentAccents(p.theme.recentAccents.slice(0, 5))
+    setAccentInk(typeof p.theme?.accentInk === 'string' ? p.theme.accentInk : '')
+    setAccentText(typeof p.theme?.accentText === 'string' ? p.theme.accentText : '')
   }, [q.data])
 
   async function onSave() {
@@ -40,7 +60,16 @@ export function ThemeEditor() {
     // (case-insensitive), capped at 5. Persisted in the theme jsonb so it survives reloads.
     const nextRecent = [accent, ...recentAccents.filter((c) => c.toLowerCase() !== accent.toLowerCase())].slice(0, 5)
     try {
-      await saveProfile({ theme: { accent, tileTheme, recentAccents: nextRecent } })
+      await saveProfile({
+        theme: {
+          accent,
+          tileTheme,
+          recentAccents: nextRecent,
+          // Persist overrides only; omitting a key means "Auto" (derived at render time).
+          ...(isHex6(accentInk) ? { accentInk } : {}),
+          ...(isHex6(accentText) ? { accentText } : {}),
+        },
+      })
       setRecentAccents(nextRecent)
       setSave('saved')
       void qc.invalidateQueries({ queryKey: adminKeys.profile })
@@ -83,12 +112,22 @@ export function ThemeEditor() {
   const isHex = /^#[0-9a-fA-F]{6}$/.test(accent)
   const safeAccent = isHex ? accent : '#e33b3b'
 
+  // Contrast-safe derivations (mirror app/page.tsx): Auto comes from the accent, a valid
+  // custom hex overrides. Ratios feed the live WCAG badges + the auto-lighten notice.
+  const autoInk = onAccentInk(safeAccent)
+  const effInk = isHex6(accentInk) ? accentInk : autoInk
+  const autoText = readableAccentText(safeAccent)
+  const effText = isHex6(accentText) ? accentText : autoText
+  const inkRatio = contrastRatio(effInk, safeAccent) // button label vs button fill
+  const textRatio = contrastRatio(effText, PAGE_BG) // accent-text vs page bg
+  const rawTextRatio = contrastRatio(safeAccent, PAGE_BG) // the raw accent as text
+
   return (
     <>
       <header className="main-head">
         <div>
           <h1 className="page-title display">Theme</h1>
-          <p className="page-sub">The accent colour and logo-tile background on your public media kit.</p>
+          <p className="page-sub">Accent, button-label &amp; accent-text colours and the logo-tile background — with live contrast checks.</p>
         </div>
         <button type="button" className="btn btn-primary" onClick={onSave} disabled={save === 'saving' || !isHex}>
           {save === 'saving' ? 'Saving…' : save === 'saved' ? 'Save again' : 'Save theme'}
@@ -101,7 +140,7 @@ export function ThemeEditor() {
             <span className="ico-badge"><Palette size={18} aria-hidden="true" /></span>
             <h2 className="card-title">Accent &amp; tile</h2>
           </div>
-          <p className="card-sub indent">Pick a preset or enter a custom hex, and choose the logo-tile background.</p>
+          <p className="card-sub indent">Pick a preset or custom hex. The button label &amp; accent-text stay contrast-safe automatically — override either if you want.</p>
 
           <div className="card-body" style={{ display: 'flex', flexDirection: 'column', gap: 22 }}>
             <div className="field">
@@ -152,6 +191,86 @@ export function ThemeEditor() {
                 />
               </div>
               {!isHex && <span className="field-hint" style={{ color: 'var(--accent)' }}>Enter a 6-digit hex like #e33b3b.</span>}
+            </div>
+
+            <div className="field">
+              <span className="flabel">Button label</span>
+              <div className="seg" role="group" aria-label="Button label colour mode" style={{ maxWidth: 200 }}>
+                {(['auto', 'custom'] as const).map((m) => {
+                  const active = m === 'auto' ? !accentInk : !!accentInk
+                  return (
+                    <button
+                      key={m}
+                      type="button"
+                      onClick={() => setAccentInk(m === 'auto' ? '' : accentInk || autoInk)}
+                      className={`seg-btn capitalize${active ? ' active' : ''}`}
+                      aria-pressed={active}
+                    >
+                      {m}
+                    </button>
+                  )
+                })}
+              </div>
+              <div className="flex items-center gap-2" style={{ marginTop: 10 }}>
+                <span
+                  aria-hidden="true"
+                  style={{ height: 30, width: 34, borderRadius: 6, background: safeAccent, color: effInk, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 700, border: '1px solid var(--line)' }}
+                >
+                  Aa
+                </span>
+                {accentInk ? (
+                  <>
+                    <input type="color" value={isHex6(accentInk) ? accentInk : autoInk} onChange={(e) => setAccentInk(e.target.value)} aria-label="Button label colour" className="cursor-pointer" style={{ height: 30, width: 34, borderRadius: 7, border: '1px solid var(--line)', background: 'var(--field)', padding: 2 }} />
+                    <input type="text" value={accentInk} onChange={(e) => setAccentInk(e.target.value)} aria-label="Button label hex" className="input font-mono" style={{ width: 110 }} placeholder="#ffffff" />
+                  </>
+                ) : (
+                  <span className="field-hint" style={{ margin: 0 }}>Auto → {autoInk.toLowerCase()}</span>
+                )}
+                <Badge ratio={inkRatio} />
+              </div>
+              <span className="field-hint">Text on your accent button. Auto picks black or white for the best contrast.</span>
+            </div>
+
+            <div className="field">
+              <span className="flabel">Accent text</span>
+              <div className="seg" role="group" aria-label="Accent text colour mode" style={{ maxWidth: 200 }}>
+                {(['auto', 'custom'] as const).map((m) => {
+                  const active = m === 'auto' ? !accentText : !!accentText
+                  return (
+                    <button
+                      key={m}
+                      type="button"
+                      onClick={() => setAccentText(m === 'auto' ? '' : accentText || autoText)}
+                      className={`seg-btn capitalize${active ? ' active' : ''}`}
+                      aria-pressed={active}
+                    >
+                      {m}
+                    </button>
+                  )
+                })}
+              </div>
+              <div className="flex items-center gap-2" style={{ marginTop: 10 }}>
+                <span
+                  aria-hidden="true"
+                  style={{ height: 30, padding: '0 10px', borderRadius: 6, background: '#0b0a08', color: effText, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: 12.5, fontWeight: 700, border: '1px solid var(--line)' }}
+                >
+                  Text
+                </span>
+                {accentText ? (
+                  <>
+                    <input type="color" value={isHex6(accentText) ? accentText : autoText} onChange={(e) => setAccentText(e.target.value)} aria-label="Accent text colour" className="cursor-pointer" style={{ height: 30, width: 34, borderRadius: 7, border: '1px solid var(--line)', background: 'var(--field)', padding: 2 }} />
+                    <input type="text" value={accentText} onChange={(e) => setAccentText(e.target.value)} aria-label="Accent text hex" className="input font-mono" style={{ width: 110 }} placeholder={autoText} />
+                  </>
+                ) : (
+                  <span className="field-hint" style={{ margin: 0 }}>Auto → {autoText.toLowerCase()}</span>
+                )}
+                <Badge ratio={textRatio} />
+              </div>
+              {!accentText && rawTextRatio < AA_TEXT ? (
+                <span className="field-hint">Your accent is {rawTextRatio.toFixed(1)}:1 on the dark background — auto-lightened so eyebrow dots, labels &amp; links stay readable.</span>
+              ) : (
+                <span className="field-hint">Colour of the eyebrow dots, section labels &amp; links on your kit.</span>
+              )}
             </div>
 
             {recentAccents.length > 0 && (
@@ -209,7 +328,10 @@ export function ThemeEditor() {
           </div>
           <p className="card-sub indent">How the accent reads on your live media kit.</p>
           <div className="card-body">
-            <div style={{ borderRadius: 12, padding: 28, background: '#0e0d0b' }}>
+            <div style={{ borderRadius: 12, padding: 28, background: '#0b0a08' }}>
+              <div style={{ fontSize: 11, letterSpacing: 3, textTransform: 'uppercase', fontWeight: 600, color: 'rgba(244,239,229,0.55)' }}>
+                Philippines <span style={{ color: effText }}>·</span> Fashion <span style={{ color: effText }}>·</span> Beauty
+              </div>
               <div
                 style={{
                   color: '#f3eee4',
@@ -217,16 +339,18 @@ export function ThemeEditor() {
                   fontSize: 22,
                   fontWeight: 700,
                   lineHeight: 1.05,
+                  marginTop: 10,
                 }}
               >
                 simxmargo
               </div>
+              <div style={{ marginTop: 8, fontSize: 12.5, fontWeight: 600, color: effText }}>Trusted by leading brands</div>
               <span
                 style={{
                   display: 'inline-block',
                   marginTop: 18,
                   background: safeAccent,
-                  color: '#14110d',
+                  color: effInk,
                   padding: '9px 18px',
                   borderRadius: 2,
                   fontSize: 13,

@@ -3,6 +3,7 @@ import type { CSSProperties } from 'react'
 import { getMediaKit } from '@/lib/mediakit/data'
 import { SITE_URL } from '@/lib/siteUrl'
 import { formatCount, totalReach } from '@/lib/mediakit-types'
+import { onAccentInk, readableAccentText } from '@/lib/theme/contrast'
 import { MediaKitLive } from '@/components/mediakit/MediaKitLive'
 
 // ISR: re-fetch the live mediakit data at most once a minute (Supabase queries
@@ -66,8 +67,15 @@ export default async function MediaKitPage() {
   // Theme from the admin Theme editor, applied as CSS vars on the .mk root SERVER-SIDE
   // (no flash-of-default). Empty/unset falls back to the design defaults in globals.css.
   const theme = profile.theme ?? {}
+  const accent = typeof theme.accent === 'string' ? theme.accent : ''
   const mkStyle = {
-    ...(theme.accent ? { '--accent': theme.accent } : {}),
+    ...(accent ? { '--accent': accent } : {}),
+    // Contrast-safe derived tokens (overridable from the Theme editor): the on-accent
+    // button label auto-picks black/white, and accent-as-text auto-lightens when the
+    // accent is too dark to read on the page bg. Both fall back to the globals.css
+    // defaults when no custom accent is set.
+    ...(accent ? { '--accent-ink': theme.accentInk || onAccentInk(accent) } : {}),
+    ...(accent ? { '--accent-text': theme.accentText || readableAccentText(accent) } : {}),
     ...(theme.tileTheme === 'dark' ? { '--tile': '#1c1a14', '--tileink': '#f3eee4' } : {}),
   } as CSSProperties
 
