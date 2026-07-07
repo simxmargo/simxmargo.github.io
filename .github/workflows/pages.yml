@@ -59,6 +59,9 @@ jobs:
           NEXT_PUBLIC_SUPABASE_ANON_KEY: sb_publishable_DZxoO2dE_YVKvr1jkBkoDg_G5XxILGn
         run: node scripts/gen-og.mjs
 
+      # NOTE: if Supabase is PAUSED (free-tier inactivity), this build FAILS on
+      # purpose (lib/mediakit/data.ts) instead of baking mock data over the live
+      # site — the last good deploy stays up. Restore the project, then re-run.
       - name: Build static export
         env:
           EXPORT_STATIC: '1'
@@ -66,7 +69,6 @@ jobs:
           # freshly generated card on every deploy (they cache by full URL).
           OG_VERSION: ${{ github.sha }}
           NEXT_PUBLIC_SITE_URL: https://simxmargo.github.io
-          NEXT_PUBLIC_COLLAB_ENDPOINT: https://zzgypushqcpchfxrjexc.supabase.co/functions/v1/collab
           # Supabase PUBLISHABLE (anon) values: RLS-protected and already shipped in
           # the public browser bundle, so committing them here adds zero exposure (the
           # repo is public anyway) — and it means NO Actions secrets to configure.
@@ -77,6 +79,15 @@ jobs:
           # Admin login email (not secret — single-password login; ships in the bundle).
           NEXT_PUBLIC_ADMIN_EMAIL: simxmargo.collab@gmail.com
         run: npm run build
+
+      # Copy every Supabase-Storage image the export references (portraits, video
+      # covers, OG card, favicon) into out/snap/ and rewrite the references — so the
+      # published page still renders fully when the Supabase project is paused.
+      - name: Localize Supabase Storage assets into the export
+        env:
+          NEXT_PUBLIC_SITE_URL: https://simxmargo.github.io
+          NEXT_PUBLIC_SUPABASE_URL: https://zzgypushqcpchfxrjexc.supabase.co
+        run: node scripts/localize-export.mjs
 
       - run: touch out/.nojekyll # belt-and-suspenders: stop Jekyll dropping _next/
 

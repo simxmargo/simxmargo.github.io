@@ -271,6 +271,30 @@ client component that fetches Supabase in the browser — but that **loses the
 server-rendered JSON-LD/SEO** that the media kit deliberately ships. For a kit shown to
 brands, build-time snapshot + SEO is the better trade. Flagged so it's a conscious choice.
 
+### 7b. Paused-Supabase resilience (added 2026-07-06)
+
+The free-tier Supabase project **pauses after ~7 days of inactivity** (nobody opening
+the admin). The deployed page is built to survive that fully:
+
+- **Assets are localized at deploy time.** `scripts/localize-export.mjs` (a workflow
+  step after `next build`) downloads every Supabase-Storage image the export references
+  (portraits, portfolio video covers, OG card, uploaded favicon) into `out/snap/` and
+  rewrites the references to `https://simxmargo.github.io/snap/…`. The published page
+  has **zero runtime dependency on Supabase** — trade-off: the OG share card is now
+  frozen per deploy (admin re-renders need a `workflow_dispatch` rebuild to show up in
+  link previews).
+- **The client-side live refresh degrades silently.** `MediaKitLive` still tries to
+  fetch fresh rows on load; when the project is paused the read fails and the baked
+  snapshot (with local assets) simply stays. When it's awake, live data + Storage URLs
+  swap in as before.
+- **The collab form falls back to `mailto:`.** A failed insert shows "Something went
+  wrong — email me at …" instead of losing the inquiry silently.
+- **Builds while paused FAIL on purpose.** `getMediaKit()` throws under
+  `EXPORT_STATIC=1` when Supabase is unreachable (or the profile is unpublished),
+  instead of silently baking the **mock placeholder data** over the live site. The last
+  good deploy stays up; restore the project in the Supabase dashboard, then re-run the
+  workflow. (Local `next dev`/non-export builds keep the mock fallback.)
+
 ---
 
 ## 8. Connect the repo (you run git — local change only)

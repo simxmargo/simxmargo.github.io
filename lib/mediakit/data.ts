@@ -107,6 +107,13 @@ export const getThemeAccent = cache(async (): Promise<string> => {
   }
 })
 
+// Static-export (GitHub Pages CI) builds bake this read into the published site.
+// If Supabase is unreachable there — most likely the free-tier project PAUSED from
+// inactivity — falling back to mock would silently REPLACE the live site with
+// placeholder content on the next push. Failing the build keeps the last good
+// deploy up instead; local/dev builds keep the friendly mock fallback.
+const isStaticExport = process.env.EXPORT_STATIC === '1'
+
 // Wrapped in React cache() so the page render AND generateMetadata share a single
 // read per request (Supabase queries aren't deduped by Next's fetch cache).
 export const getMediaKit = cache(async (): Promise<MediaKitData> => {
@@ -122,8 +129,14 @@ export const getMediaKit = cache(async (): Promise<MediaKitData> => {
         .order('sort_order', { ascending: true }),
     ])
     if (profileRes.error) throw profileRes.error
-    // Not published yet → show the polished mock rather than a half-empty live page.
-    if (!profileRes.data) return mockMediaKit
+    // Not published yet → show the polished mock rather than a half-empty live page
+    // (but never publish the mock: a real project with no published profile means an
+    // export build should stop, same as an outage).
+    if (!profileRes.data) {
+      if (isStaticExport)
+        throw new Error('public_profile id=1 is missing/unpublished — refusing to bake the mock into the export')
+      return mockMediaKit
+    }
 
     return {
       profile: mapProfile(profileRes.data),
@@ -131,6 +144,12 @@ export const getMediaKit = cache(async (): Promise<MediaKitData> => {
       brands: (brandsRes.data ?? []).map(mapBrand),
     }
   } catch (err) {
+    if (isStaticExport) {
+      console.error(
+        '[mediakit] EXPORT build could not read live data (Supabase paused/unreachable?) — failing the build so the last good deploy stays up.',
+      )
+      throw err
+    }
     console.error('[mediakit] live read failed; using mock:', err instanceof Error ? err.message : err)
     return mockMediaKit
   }
