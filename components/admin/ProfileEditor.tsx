@@ -242,11 +242,11 @@ export function ProfileEditor() {
   }
 
   const metrics = q.data?.metrics
-  // Live preview of the hero meta label: your location + the first three niche tokens,
-  // exactly as the public hero renders them (mirrors the removed Hero tab's preview).
+  // Live preview of the hero meta label: your location + every niche token, exactly
+  // as the public hero renders them (mirrors the removed Hero tab's preview).
   const nicheLabelPreview = [
     form.location.trim(),
-    ...form.niche.split('·').map((t) => t.trim()).filter(Boolean).slice(0, 3),
+    ...form.niche.split('·').map((t) => t.trim()).filter(Boolean),
   ]
     .filter(Boolean)
     .join('  ·  ')

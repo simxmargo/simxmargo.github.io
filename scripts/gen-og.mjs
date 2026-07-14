@@ -93,12 +93,11 @@ async function liveData() {
     const sum = socials.reduce((acc, s) => acc + Number(s.followers || 0), 0)
     const total = profile.total_followers != null ? Number(profile.total_followers) : sum
 
-    // Eyebrow tokens mirror the hero: [location, ...first 3 niche tokens].
+    // Eyebrow tokens mirror the hero: [location, ...every niche token].
     const nicheTokens = String(profile.niche || '')
       .split('·')
       .map((t) => t.trim())
       .filter(Boolean)
-      .slice(0, 3)
     const tokens = [profile.location, ...nicheTokens].map((t) => String(t || '').trim()).filter(Boolean)
 
     // The uploaded "Social share image" lives in seo.og_image_url (snake — the key the

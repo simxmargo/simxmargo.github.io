@@ -106,7 +106,6 @@ async function liveData(sb: Sb): Promise<CardData> {
     .split('·')
     .map((t) => t.trim())
     .filter(Boolean)
-    .slice(0, 3)
   const tokens = [p.location, ...nicheTokens].map((t) => String(t || '').trim()).filter(Boolean)
 
   return {

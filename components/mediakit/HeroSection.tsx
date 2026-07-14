@@ -26,7 +26,6 @@ export function HeroSection({ profile, socials }: HeroSectionProps) {
     .split('·')
     .map((t) => t.trim())
     .filter(Boolean)
-    .slice(0, 3)
   const tokens = [profile.location, ...nicheTokens].filter(Boolean)
 
   return (
