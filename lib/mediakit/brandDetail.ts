@@ -126,13 +126,14 @@ function fmt(n: number): string {
 // The single quiet empty state shared by every modal stat (no "N/A", no fake value).
 const DASH = '~'
 
-// The brand's REAL top-content pieces: admin-curated/ScrapeCreators-pulled reels with a
-// post link, capped at 8. This is the ONE definition of "top content" — shared by the
-// content grid AND the avg-views/likes stats so they can never disagree.
+// The brand's REAL top-content pieces: every admin-curated/ScrapeCreators-pulled reel
+// with a post link (uncapped — the grid scrolls). This is the ONE definition of "top
+// content" — shared by the content grid AND the avg-views/likes stats so they can
+// never disagree.
 function topContentMedia(media: BrandMedia[]): BrandMedia[] {
-  return (Array.isArray(media) ? media : [])
-    .filter((m) => m && typeof m.url === 'string' && m.url)
-    .slice(0, 8)
+  return (Array.isArray(media) ? media : []).filter(
+    (m) => m && typeof m.url === 'string' && m.url,
+  )
 }
 
 // Top-content pieces → ContentCard[] (real thumbnail + post link + scraped view/like
