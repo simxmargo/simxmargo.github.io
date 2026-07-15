@@ -51,11 +51,12 @@ function coerceRowIndex(v: unknown): 1 | 2 | null {
 }
 
 // Validate + coerce the form's `media` array at the boundary — never store raw client
-// jsonb. Caps length, whitelists fields, parses compact counts ("1.8M"), drops empties.
+// jsonb. Whitelists fields, caps per-field lengths, parses compact counts ("1.8M"),
+// drops empties. Deliberately NO item-count cap — the modal grid scrolls.
 function sanitizeMedia(input: unknown): BrandMedia[] {
   if (!Array.isArray(input)) return []
   const out: BrandMedia[] = []
-  for (const raw of input.slice(0, 12)) {
+  for (const raw of input) {
     const m = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {}
     const url = typeof m.url === 'string' ? m.url.trim().slice(0, 600) : ''
     if (!url) continue

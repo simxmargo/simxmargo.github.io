@@ -572,6 +572,20 @@ function BrandEditorModal({
   const removeContent = (i: number) => setForm((f) => ({ ...f, media: f.media.filter((_, idx) => idx !== i) }))
   const updateContent = (i: number, patch: Partial<ContentDraft>) =>
     setForm((f) => ({ ...f, media: f.media.map((m, idx) => (idx === i ? { ...m, ...patch } : m)) }))
+  // Bulk add: paste many TikTok/IG links at once → one row per link, each of which
+  // then auto-fetches its own cover/caption/counts (see ContentRow's mount fetch).
+  // Dedupes within the paste and against rows already in the form. No count limit.
+  const [bulkOpen, setBulkOpen] = useState(false)
+  const [bulkText, setBulkText] = useState('')
+  const bulkUrls = Array.from(new Set(bulkText.match(/https?:\/\/\S+/g) ?? [])).filter(
+    (u) => !form.media.some((m) => m.url.trim() === u),
+  )
+  const addBulk = () => {
+    if (!bulkUrls.length) return
+    setForm((f) => ({ ...f, media: [...f.media, ...bulkUrls.map((url) => ({ ...EMPTY_CONTENT, url }))] }))
+    setBulkText('')
+    setBulkOpen(false)
+  }
   const panelRef = useRef<HTMLFormElement>(null)
   useDialog(panelRef, onCancel)
 
@@ -778,9 +792,50 @@ function BrandEditorModal({
                 onRemove={() => removeContent(i)}
               />
             ))}
-            <button type="button" className="btn btn-ghost btn-sm" onClick={addContent} style={{ alignSelf: 'flex-start' }}>
-              <Plus size={14} aria-hidden="true" /> Add content
-            </button>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button type="button" className="btn btn-ghost btn-sm" onClick={addContent}>
+                <Plus size={14} aria-hidden="true" /> Add content
+              </button>
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                aria-expanded={bulkOpen}
+                onClick={() => setBulkOpen((v) => !v)}
+              >
+                <Link2 size={14} aria-hidden="true" /> Bulk add
+              </button>
+            </div>
+            {bulkOpen && (
+              <div className="field">
+                <label className="flabel" htmlFor="bulk-links">
+                  Paste links — one per line (spaces or commas work too)
+                </label>
+                <textarea
+                  id="bulk-links"
+                  className="input"
+                  rows={5}
+                  placeholder={'https://vt.tiktok.com/…\nhttps://www.instagram.com/reel/…'}
+                  value={bulkText}
+                  onChange={(e) => setBulkText(e.target.value)}
+                  style={{ resize: 'vertical', fontFamily: 'inherit' }}
+                />
+                <div className="flex items-center gap-2" style={{ marginTop: 8 }}>
+                  <button type="button" className="btn btn-primary btn-sm" disabled={!bulkUrls.length} onClick={addBulk}>
+                    <Plus size={14} aria-hidden="true" /> Add {bulkUrls.length || ''} link{bulkUrls.length === 1 ? '' : 's'}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-sm"
+                    onClick={() => { setBulkOpen(false); setBulkText('') }}
+                  >
+                    Cancel
+                  </button>
+                </div>
+                <p className="field-hint">
+                  Each link becomes a row below and fills in its cover, caption &amp; counts automatically.
+                </p>
+              </div>
+            )}
           </div>
         </div>
 
@@ -840,6 +895,18 @@ function ContentRow({
   const likesPreview = preview(draft.likes)
 
   const isSupported = !!detectPostPlatform(draft.url.trim())
+
+  // Bulk-added rows arrive with ONLY a URL — auto-fill them on mount. The pristine
+  // guard (no cover/caption/counts yet) keeps saved rows from re-spending a scrape
+  // credit every time the modal opens; the ref guards React's dev double-mount.
+  const autoFetched = useRef(false)
+  useEffect(() => {
+    if (autoFetched.current) return
+    autoFetched.current = true
+    const u = draft.url.trim()
+    if (u && detectPostPlatform(u) && !draft.thumbUrl && !draft.caption && !draft.views) void runFetch(u)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   async function runFetch(rawUrl: string, force = false) {
     const sb = supabaseBrowser
