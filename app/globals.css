@@ -193,8 +193,11 @@ body {
 .mk .leg { display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--faint); font-weight: 500; text-transform: capitalize; }
 .mk .leg-ic { width: 15px; height: 15px; color: var(--accent-text); }
 /* Expanded-view filter chips: same legend look, but interactive — white on hover,
-   white + accent underline while active (single-select; re-click clears). */
-.mk .leg-btn { background: none; border: none; padding: 0; font: inherit; cursor: pointer; transition: color 0.2s ease; }
+   white + accent underline while active (single-select; re-click clears).
+   NOTE: no `font: inherit` — the shorthand would pull the PARENT's ~16px size over
+   .leg's 12px/500 and make button chips render bigger than the span chips. Only the
+   family/line-height need un-resetting; .leg supplies size + weight in both states. */
+.mk .leg-btn { background: none; border: none; padding: 0; font-family: inherit; line-height: inherit; cursor: pointer; transition: color 0.2s ease; }
 .mk .leg-btn:hover { color: var(--ink); }
 .mk .leg-btn:focus-visible { outline: 2px solid var(--accent-text); outline-offset: 3px; border-radius: 2px; }
 .mk .leg-btn.is-active { color: var(--ink); text-decoration: underline; text-underline-offset: 5px; text-decoration-color: var(--accent-text); }
