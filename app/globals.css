@@ -151,6 +151,8 @@ body {
 .mk .reach { padding: clamp(56px, 8vw, 104px) 0; border-top: 1px solid var(--line); }
 .mk .reach-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: clamp(8px, 3vw, 40px); }
 .mk .pcard { display: flex; flex-direction: column; gap: 14px; padding: clamp(8px, 2vw, 16px) 0; }
+.mk .pcard-link { text-decoration: none; color: inherit; cursor: pointer; }
+.mk .pcard-link:hover .phandle { color: var(--ink); }
 .mk .pcard:not(:first-child) { border-left: 1px solid var(--line); padding-left: clamp(18px, 3vw, 44px); }
 .mk .picon { width: 38px; height: 38px; color: var(--accent-text); }
 .mk .pnum { font-size: clamp(30px, 4.2vw, 56px); line-height: 0.9; font-weight: 700; letter-spacing: -0.03em; }
