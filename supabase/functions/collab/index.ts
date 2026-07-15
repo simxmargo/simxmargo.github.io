@@ -8,19 +8,21 @@
 // policy only allows status='new' + a non-empty message).
 //
 // Email is BEST-EFFORT and strictly insert-first: the inquiry is always saved
-// (and visible in the studio Inquiries inbox) even when Resend is down or the
-// RESEND_API_KEY secret isn't set — a send failure is logged, never surfaced as
-// a form error. reply_to is the submitter, so replying goes straight to the brand.
+// (and visible in the studio Inquiries inbox) even when no transport is configured
+// or the send fails — failures are logged, never surfaced as a form error.
+// reply_to is the submitter, so replying goes straight to the brand.
+//
+// Transport: Gmail SMTP — set GMAIL_SMTP_PASSWORD (a Google App Password for
+// simxmargo.collab@gmail.com; the account needs 2-Step Verification ON).
+// Gmail→same-Gmail, so deliverability is a non-issue. Optional GMAIL_SMTP_USER
+// overrides the account; optional COLLAB_NOTIFY_TO overrides the recipient.
 //
 // Deploy:  ./node_modules/.bin/supabase functions deploy collab --no-verify-jwt --use-api
 //   --no-verify-jwt because this is a PUBLIC endpoint; the honeypot + RLS + DB
 //   CHECKs are the protection, not a JWT.
-// Secrets: RESEND_API_KEY (required for email), optional COLLAB_NOTIFY_TO
-//   (default simxmargo.collab@gmail.com) and COLLAB_NOTIFY_FROM (default
-//   onboarding@resend.dev — fine while the Resend account has no verified domain,
-//   since Resend allows that sender to the account owner's own address).
 
 import { createClient } from 'jsr:@supabase/supabase-js@2'
+import { SMTPClient } from 'https://deno.land/x/denomailer@1.6.0/mod.ts'
 import { json, preflight } from '../_shared/http.ts'
 
 const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/
@@ -41,17 +43,44 @@ interface InquiryEmail {
   sourcePath: string
 }
 
+// Transport 1 — Gmail SMTP (App Password; the account needs 2-Step Verification).
+// Port 465 implicit TLS (STARTTLS on 587 is flaky from Edge Functions). The client
+// is closed in finally so a timed-out send can't leak the connection.
+async function sendViaGmail(
+  user: string,
+  pass: string,
+  to: string,
+  replyTo: string,
+  subject: string,
+  text: string,
+): Promise<void> {
+  const client = new SMTPClient({
+    connection: {
+      hostname: 'smtp.gmail.com',
+      port: 465,
+      tls: true,
+      auth: { username: user, password: pass },
+    },
+  })
+  try {
+    await Promise.race([
+      client.send({ from: `simxmargo media kit <${user}>`, to, replyTo, subject, content: text }),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('SMTP send timed out (15s)')), 15_000)),
+    ])
+  } finally {
+    try {
+      await client.close()
+    } catch {
+      /* connection already gone */
+    }
+  }
+}
+
 // Best-effort notification to the influencer. Never throws — the inquiry is already
 // saved by the time this runs, so any failure here is logged and swallowed.
 async function notifyByEmail(inq: InquiryEmail): Promise<void> {
-  const key = Deno.env.get('RESEND_API_KEY')
-  if (!key) {
-    console.error('[collab] RESEND_API_KEY not set — inquiry saved, email notification skipped')
-    return
-  }
   const to = Deno.env.get('COLLAB_NOTIFY_TO') || 'simxmargo.collab@gmail.com'
-  const from = Deno.env.get('COLLAB_NOTIFY_FROM') || 'simxmargo media kit <onboarding@resend.dev>'
-
+  const subject = `New collab brief — ${inq.name}${inq.company ? ` · ${inq.company}` : ''}`
   const lines = [
     `Name: ${inq.name}`,
     `Email: ${inq.email}`,
@@ -64,25 +93,20 @@ async function notifyByEmail(inq: InquiryEmail): Promise<void> {
     '—',
     `Sent from ${inq.sourcePath} · reply to this email to answer ${inq.name} directly.`,
   ].filter((l, i, a) => l !== '' || a[i - 1] !== '') // collapse double blanks
+  const text = lines.join('\n')
 
+  const gmailPass = Deno.env.get('GMAIL_SMTP_PASSWORD')
+  const gmailUser = Deno.env.get('GMAIL_SMTP_USER') || 'simxmargo.collab@gmail.com'
   try {
-    const res = await fetch('https://api.resend.com/emails', {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        from,
-        to: [to],
-        reply_to: inq.email,
-        subject: `New collab brief — ${inq.name}${inq.company ? ` · ${inq.company}` : ''}`,
-        text: lines.join('\n'),
-      }),
-      signal: AbortSignal.timeout(8000),
-    })
-    if (!res.ok) {
-      console.error('[collab] Resend send failed:', res.status, await res.text())
+    if (gmailPass) {
+      await sendViaGmail(gmailUser, gmailPass, to, inq.email, subject, text)
+    } else {
+      console.error(
+        '[collab] GMAIL_SMTP_PASSWORD not set — inquiry saved, email notification skipped',
+      )
     }
   } catch (err) {
-    console.error('[collab] Resend send errored:', err instanceof Error ? err.message : err)
+    console.error('[collab] email notify failed:', err instanceof Error ? err.message : err)
   }
 }
 
