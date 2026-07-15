@@ -9,6 +9,7 @@ import { useAdminResource, adminKeys, type AdminFetchError } from '@/lib/admin/q
 import { StudioImageSlot } from '@/components/admin/StudioImageSlot'
 import { FormSkeleton } from '@/components/admin/Skeleton'
 import { themeFaviconDataUrl } from '@/lib/mediakit/favicon'
+import { applyFavicon } from '@/lib/applyFavicon'
 import type { PublicProfile } from '@/lib/mediakit-types'
 
 // App-config-only Studio Settings. All creator identity + outreach fields and the
@@ -63,6 +64,10 @@ export function SettingsPage() {
       await saveSettings({ faviconUrl, dailyCap })
       setSave('saved')
       qc.invalidateQueries({ queryKey: adminKeys.settings })
+      // favicon_url lives on the profile row too (AdminShell reads it from there) —
+      // keep that cache honest AND swap the tab icon immediately for instant feedback.
+      qc.invalidateQueries({ queryKey: adminKeys.profile })
+      applyFavicon(faviconUrl || defaultFavicon)
       void rehydrate() // refresh the queue meter so it picks up the new daily cap
     } catch (e) {
       const msg = e instanceof Error ? e.message : ''

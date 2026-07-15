@@ -6,6 +6,8 @@ import { useStore } from '@/lib/store'
 import { AdminQueryProvider } from '@/components/admin/AdminQueryProvider'
 import { useAdminResource } from '@/lib/admin/queries'
 import { readCachedAccent, writeCachedAccent, accentStyle } from '@/lib/admin/themeCache'
+import { applyFavicon } from '@/lib/applyFavicon'
+import { themeFaviconDataUrl } from '@/lib/mediakit/favicon'
 import type { PublicProfile } from '@/lib/mediakit-types'
 import { ContactsPage } from '@/components/pages/ContactsPage'
 import { QueuePage } from '@/components/pages/QueuePage'
@@ -78,6 +80,15 @@ function StudioShell() {
     writeCachedAccent(liveAccent)
   }, [liveAccent])
   const style = accentStyle(typeof liveAccent === 'string' ? liveAccent : cachedAccent)
+
+  // The static export bakes the favicon that existed at BUILD time — swap in the
+  // live one (uploaded, else the theme mark) once the profile loads, so a Settings
+  // upload shows on the studio tab after a refresh without a redeploy.
+  const liveFavicon = profileQ.data?.faviconUrl
+  useEffect(() => {
+    if (!profileQ.data) return
+    applyFavicon(liveFavicon || themeFaviconDataUrl(typeof liveAccent === 'string' ? liveAccent : ''))
+  }, [profileQ.data, liveFavicon, liveAccent])
 
   return (
     <div className="studio" style={style}>

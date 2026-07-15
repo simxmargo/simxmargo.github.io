@@ -12,6 +12,8 @@ import { useEffect, useState } from 'react'
 import type { MediaKitData } from '@/lib/mediakit-types'
 import { DEFAULT_SITE_COPY } from '@/lib/mediakit-types'
 import { getMediaKitClient } from '@/lib/mediakit/clientData'
+import { applyFavicon } from '@/lib/applyFavicon'
+import { themeFaviconDataUrl } from '@/lib/mediakit/favicon'
 import { RevealRoot } from '@/components/mediakit/RevealRoot'
 import { TopNav } from '@/components/mediakit/TopNav'
 import { HeroSection } from '@/components/mediakit/HeroSection'
@@ -26,7 +28,15 @@ export function MediaKitLive({ initial }: { initial: MediaKitData }) {
   useEffect(() => {
     let cancelled = false
     getMediaKitClient().then((fresh) => {
-      if (!cancelled && fresh) setData(fresh)
+      if (!cancelled && fresh) {
+        setData(fresh)
+        // The baked <head> favicon is whatever existed at BUILD time — let the live
+        // value win (uploaded icon, else the current theme mark). A failed read
+        // never reaches here, so the baked icon stays as the offline fallback.
+        applyFavicon(
+          fresh.profile.faviconUrl || themeFaviconDataUrl(fresh.profile.theme?.accent ?? ''),
+        )
+      }
     })
     return () => {
       cancelled = true

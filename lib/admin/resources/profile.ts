@@ -61,6 +61,7 @@ function mapProfile(r: any): Omit<ProfileReadResult, 'metrics' | 'platforms'> {
     bioMd: r.bio_md ?? '',
     avatarUrl: r.avatar_url ?? '',
     heroImageUrl: r.hero_image_url ?? '',
+    faviconUrl: r.favicon_url ?? '',
     ogImageUrl: seo.og_image_url ?? '',
     rateCard: Array.isArray(r.rate_card) ? r.rate_card : [],
     showRates: r.show_rates !== false, // default true (column added in 0009)
@@ -98,6 +99,7 @@ export interface ProfileReadResult {
   bioMd: string
   avatarUrl: string
   heroImageUrl: string
+  faviconUrl: string
   ogImageUrl: string
   rateCard: RateCardItem[]
   showRates: boolean
