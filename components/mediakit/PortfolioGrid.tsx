@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { formatCount } from '@/lib/mediakit-types'
 import type { PortfolioBrand, SocialStat } from '@/lib/mediakit-types'
-import { buildBrandDetail, type CategoryKey } from '@/lib/mediakit/brandDetail'
+import { buildBrandDetail, categoryKey, type CategoryKey } from '@/lib/mediakit/brandDetail'
 
 interface PortfolioGridProps {
   brands: PortfolioBrand[]
@@ -103,16 +103,8 @@ const CAT_ICON: Record<CategoryKey, () => React.JSX.Element> = {
   media: mediaIcon,
 }
 
-function catKey(category: string): CategoryKey {
-  const c = (category || '').toLowerCase()
-  if (c.includes('beaut')) return 'beauty'
-  if (c.includes('app')) return 'app'
-  if (c.includes('media')) return 'media'
-  return 'fashion'
-}
-
 function catIcon(category: string) {
-  return CAT_ICON[catKey(category)]()
+  return CAT_ICON[categoryKey(category)]()
 }
 
 const CLOSE_MS = 240
@@ -126,6 +118,17 @@ export function PortfolioGrid({ brands, socials = [], partnersEyebrow, partnersT
   const mid = Math.ceil(brands.length / 2)
   const rowA = hasExplicitRows ? brands.filter((b) => b.rowIndex !== 2) : brands.slice(0, mid)
   const rowB = hasExplicitRows ? brands.filter((b) => b.rowIndex === 2) : brands.slice(mid)
+
+  // Legend: the DISTINCT categories actually on the brands (as the admin typed them),
+  // in first-appearance order — never a hardcoded list. Derived from the same baked
+  // `brands` prop as the tiles, so it stays correct even while Supabase is paused.
+  // Case-insensitive dedupe; the first-seen casing is the one displayed.
+  const legendMap = new Map<string, string>()
+  for (const b of brands) {
+    const c = (b.category || '').trim()
+    if (c && !legendMap.has(c.toLowerCase())) legendMap.set(c.toLowerCase(), c)
+  }
+  const legendCats = Array.from(legendMap.values())
 
   // Modal state: which brand is open + a brief `closing` phase that plays the exit
   // animation before unmount (mirrors the design's closeBrand timer).
@@ -323,18 +326,12 @@ export function PortfolioGrid({ brands, socials = [], partnersEyebrow, partnersT
             <h2 className="display h2 reveal">{partnersTitle}</h2>
           </div>
           <div className="legend reveal">
-            <span className="leg">
-              <span className="leg-ic">{fashionIcon()}</span>Fashion
-            </span>
-            <span className="leg">
-              <span className="leg-ic">{beautyIcon()}</span>Beauty
-            </span>
-            <span className="leg">
-              <span className="leg-ic">{appIcon()}</span>App
-            </span>
-            <span className="leg">
-              <span className="leg-ic">{mediaIcon()}</span>Media
-            </span>
+            {legendCats.map((c) => (
+              <span className="leg" key={c}>
+                <span className="leg-ic">{catIcon(c)}</span>
+                {c}
+              </span>
+            ))}
           </div>
         </div>
         {/* Collapsed: two auto-scrolling rows. Kept MOUNTED (display:none when expanded)

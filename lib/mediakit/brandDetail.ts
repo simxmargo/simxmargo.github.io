@@ -108,11 +108,14 @@ function resolveCurated(brand: PortfolioBrand): CuratedDetail | null {
   return null
 }
 
+// Fuzzy bucket for a free-text admin category → icon/dot only (labels always show
+// the admin's real text). "Song Promo" / music-flavored categories share the media
+// (play) glyph; anything unrecognized falls back to the fashion glyph.
 export function categoryKey(category: string): CategoryKey {
   const c = (category || '').toLowerCase()
   if (c.includes('beaut')) return 'beauty'
   if (c.includes('app')) return 'app'
-  if (c.includes('media')) return 'media'
+  if (c.includes('media') || c.includes('song') || c.includes('music') || c.includes('promo')) return 'media'
   return 'fashion'
 }
 
@@ -168,9 +171,12 @@ export function buildBrandDetail(brand: PortfolioBrand): BrandDetailVM {
   const items = topContentMedia(brand.media)
   const content = mapRealContent(items)
 
-  // Header labels: curated `type`/category for the original showcase brands, else
-  // DB-derived (campaign title + category). Stats below are always live, never curated.
+  // Header labels: the eyebrow shows the brand's REAL admin-entered category text
+  // (e.g. "Song Promo"), falling back to the bucket label only when it's blank; the
+  // curated `type` survives for the original showcase brands. Stats below are always
+  // live, never curated.
   const key = curated?.cat ?? categoryKey(brand.category)
+  const catLabel = brand.category?.trim() || CAT_LABEL[key]
   const type = curated?.type ?? brand.campaignTitle ?? ''
 
   // The stats. DELIVERABLES, AVG VIEWS and AVG LIKES are all DERIVED from the same
@@ -204,8 +210,8 @@ export function buildBrandDetail(brand: PortfolioBrand): BrandDetailVM {
     name: brand.brand,
     logoUrl: brand.logoUrl,
     categoryKey: key,
-    catLabel: CAT_LABEL[key],
-    type: type || CAT_LABEL[key],
+    catLabel,
+    type: type || catLabel,
     blurb: brand.blurb || '',
     metaCells,
     content,
