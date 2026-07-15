@@ -22,10 +22,18 @@ function platformHandle(social: SocialStat): string {
   return '@' + social.handle
 }
 
-// The admin-entered profile URL wins; otherwise derive one from the bare handle so
+// The admin-entered profile URL wins (http/https ONLY — a stored javascript: URL
+// must never become a live href); otherwise derive one from the bare handle so
 // every card links out even before a profile_url is filled in.
 function profileHref(social: SocialStat): string {
-  if (social.profileUrl) return social.profileUrl
+  if (social.profileUrl) {
+    try {
+      const u = new URL(social.profileUrl)
+      if (u.protocol === 'https:' || u.protocol === 'http:') return u.toString()
+    } catch {
+      /* not a valid absolute URL — fall through to the handle-derived link */
+    }
+  }
   const handle = social.handle.replace(/^@/, '')
   if (!handle) return ''
   if (social.platform === 'tiktok') return `https://www.tiktok.com/@${handle}`
