@@ -156,10 +156,18 @@ body {
 .mk .pcard:not(:first-child) { border-left: 1px solid var(--line); padding-left: clamp(18px, 3vw, 44px); }
 .mk .picon { width: 38px; height: 38px; color: var(--accent-text); }
 .mk .pnum { font-size: clamp(30px, 4.2vw, 56px); line-height: 0.9; font-weight: 700; letter-spacing: -0.03em; }
-/* Count-up "glow up": a soft ink + terracotta halo while the number is mid-count,
-   easing away once it settles. Reduced-motion never counts, so it never glows. */
-.mk .pnum span { transition: text-shadow 0.5s ease; }
-.mk .pnum span.is-counting { text-shadow: 0 0 16px rgba(243, 238, 228, 0.32), 0 0 40px rgba(224, 105, 75, 0.18); }
+/* Reach-card hover pop: the number lifts + grows and the platform glyph nudges up
+   (transform-only, no layout shift — same cubic-bezier family as the brand tiles).
+   Mirrored on :focus-visible so keyboard users get the same affordance. */
+.mk .pcard-link .pnum, .mk .pcard-link .picon { transition: transform 0.25s cubic-bezier(0.2, 0.7, 0.2, 1); transform-origin: left center; will-change: transform; }
+.mk .pcard-link:hover .pnum, .mk .pcard-link:focus-visible .pnum { transform: translateY(-4px) scale(1.06); }
+.mk .pcard-link:hover .picon, .mk .pcard-link:focus-visible .picon { transform: translateY(-3px) scale(1.12); }
+.mk .pcard-link:focus-visible { outline: 2px solid var(--accent-text); outline-offset: 8px; border-radius: 4px; }
+@media (prefers-reduced-motion: reduce) {
+  .mk .pcard-link .pnum, .mk .pcard-link .picon { transition: none; }
+  .mk .pcard-link:hover .pnum, .mk .pcard-link:hover .picon,
+  .mk .pcard-link:focus-visible .pnum, .mk .pcard-link:focus-visible .picon { transform: none; }
+}
 .mk .pmeta { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
 .mk .plat { font-size: 15px; font-weight: 600; }
 .mk .phandle { font-size: 13px; color: var(--faint); }

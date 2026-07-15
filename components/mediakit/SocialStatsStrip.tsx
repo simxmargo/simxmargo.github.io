@@ -47,19 +47,13 @@ function profileHref(social: SocialStat): string {
 function ReachCard({ social }: { social: SocialStat }) {
   const { value, ref } = useCountUp(social.followers)
   const href = profileHref(social)
-  // Soft glow while the number is mid-count that eases away once it settles. Under
-  // prefers-reduced-motion the hook jumps straight to the target, so `counting` is
-  // never true and the glow never fires.
-  const counting = value > 0 && value < social.followers
   const body = (
     <>
       <div className="picon">
         <BrandGlyph platform={social.platform} size={38} colored={false} />
       </div>
       <div className="pnum display">
-        <span ref={ref} className={counting ? 'is-counting' : undefined}>
-          {formatCount(value)}
-        </span>
+        <span ref={ref}>{formatCount(value)}</span>
       </div>
       <div className="pmeta">
         <span className="plat">{platformLabel(social.platform)}</span>
