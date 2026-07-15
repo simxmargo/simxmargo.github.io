@@ -142,6 +142,11 @@ export function PortfolioGrid({ brands, socials = [], partnersEyebrow, partnersT
   // static responsive grid of ALL brands. "See all" / "Show less" toggles between them.
   const [expanded, setExpanded] = useState(false)
 
+  // Category filter — ONLY while expanded (the marquee always shows everything).
+  // Single-select: clicking a legend chip shows just that category; clicking it
+  // again clears back to all. Stored lowercase to match case-insensitively.
+  const [activeCat, setActiveCat] = useState<string | null>(null)
+
   // Marquee drive: rAF-controlled translateX per row so we can SMOOTHLY ramp speed
   // (CSS animation-duration can't be eased — it jumps). Base speed is fast; a row
   // eases to SLOW on hover (that row only), and BOTH rows ease to SLOW while the
@@ -326,12 +331,29 @@ export function PortfolioGrid({ brands, socials = [], partnersEyebrow, partnersT
             <h2 className="display h2 reveal">{partnersTitle}</h2>
           </div>
           <div className="legend reveal">
-            {legendCats.map((c) => (
-              <span className="leg" key={c}>
-                <span className="leg-ic">{catIcon(c)}</span>
-                {c}
-              </span>
-            ))}
+            {legendCats.map((c) => {
+              const k = c.toLowerCase()
+              const isActive = activeCat === k
+              // Expanded → the chips become single-select filter toggles; collapsed →
+              // the same passive legend as before (the marquee can't filter).
+              return expanded ? (
+                <button
+                  type="button"
+                  className={`leg leg-btn${isActive ? ' is-active' : ''}`}
+                  key={c}
+                  aria-pressed={isActive}
+                  onClick={() => setActiveCat(isActive ? null : k)}
+                >
+                  <span className="leg-ic">{catIcon(c)}</span>
+                  {c}
+                </button>
+              ) : (
+                <span className="leg" key={c}>
+                  <span className="leg-ic">{catIcon(c)}</span>
+                  {c}
+                </span>
+              )
+            })}
           </div>
         </div>
         {/* Collapsed: two auto-scrolling rows. Kept MOUNTED (display:none when expanded)
@@ -359,8 +381,18 @@ export function PortfolioGrid({ brands, socials = [], partnersEyebrow, partnersT
           </div>
         </div>
 
-        {/* Expanded: every brand as a static responsive grid (each brand once). */}
-        {expanded && <div className="lgrid">{tiles(brands, 'grid')}</div>}
+        {/* Expanded: a static responsive grid — all brands, or just the active
+            category. Keyed by the filter so a change replays the tile fade-in. */}
+        {expanded && (
+          <div className="lgrid" key={activeCat ?? 'all'}>
+            {tiles(
+              activeCat
+                ? brands.filter((b) => (b.category || '').trim().toLowerCase() === activeCat)
+                : brands,
+              'grid',
+            )}
+          </div>
+        )}
 
         {brands.length > 0 && (
           <div className="lmore">
@@ -368,7 +400,12 @@ export function PortfolioGrid({ brands, socials = [], partnersEyebrow, partnersT
               type="button"
               className="btn btn-ghost lmore-btn"
               aria-expanded={expanded}
-              onClick={() => setExpanded((v) => !v)}
+              onClick={() => {
+                // Collapsing (or expanding fresh) always starts unfiltered — the
+                // filter is an expanded-view concept only.
+                setActiveCat(null)
+                setExpanded((v) => !v)
+              }}
             >
               {expanded ? 'Show Less' : 'Show All'}
               <span className="lmore-ic" aria-hidden="true">{expanded ? '↑' : '↓'}</span>
