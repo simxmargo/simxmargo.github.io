@@ -157,6 +157,7 @@ export interface ProfileSavePatch {
   showRates?: boolean
   showRatesSection?: boolean
   pressLogos?: PressLogo[]
+  faviconUrl?: string
   theme?: PublicProfile['theme']
   content?: PublicProfile['content']
   isPublished?: boolean
@@ -179,11 +180,11 @@ export async function saveProfile(patch: ProfileSavePatch): Promise<void> {
   const updates: Record<string, unknown> = {}
   const map: Record<string, string> = {
     displayName: 'display_name', handle: 'handle', tagline: 'tagline', bioMd: 'bio_md',
-    avatarUrl: 'avatar_url', location: 'location', niche: 'niche',
+    avatarUrl: 'avatar_url', heroImageUrl: 'hero_image_url', location: 'location', niche: 'niche',
     audience: 'audience', replyToEmail: 'reply_to_email', mailingAddress: 'mailing_address',
     mediaKitUrl: 'media_kit_url', totalFollowers: 'total_followers', rateCard: 'rate_card',
     showRates: 'show_rates', showRatesSection: 'show_rates_section', pressLogos: 'press_logos',
-    theme: 'theme', isPublished: 'is_published',
+    faviconUrl: 'favicon_url', theme: 'theme', isPublished: 'is_published',
   }
   for (const [camel, snake] of Object.entries(map)) {
     if (camel in b) updates[snake] = b[camel]

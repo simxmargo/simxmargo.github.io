@@ -2,12 +2,15 @@
 
 import { useEffect, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import { CheckCircle2, AlertTriangle, RotateCcw, Palette, Eye } from 'lucide-react'
+import { CheckCircle2, AlertTriangle, RotateCcw, Palette, Eye, ImageIcon } from 'lucide-react'
 import { saveProfile } from '@/lib/admin/resources/profile'
 import { useAdminResource, adminKeys, AdminFetchError } from '@/lib/admin/queries'
 import type { PublicProfile } from '@/lib/mediakit-types'
 import { onAccentInk, readableAccentText, contrastRatio, contrastLabel, PAGE_BG, AA_TEXT } from '@/lib/theme/contrast'
 import { FormSkeleton } from '@/components/admin/Skeleton'
+import { StudioImageSlot } from '@/components/admin/StudioImageSlot'
+import { themeFaviconDataUrl } from '@/lib/mediakit/favicon'
+import { applyFavicon } from '@/lib/applyFavicon'
 
 // Accent presets: the active brand red first, then the design's original 5 options.
 const PRESETS = ['#e33b3b', '#e0694b', '#c89b3c', '#b6485f', '#6f7d5a', '#8a6fc4']
@@ -37,6 +40,7 @@ export function ThemeEditor() {
   const [recentAccents, setRecentAccents] = useState<string[]>([])
   const [accentInk, setAccentInk] = useState('') // '' = Auto (derive from accent)
   const [accentText, setAccentText] = useState('') // '' = Auto (readable accent)
+  const [faviconUrl, setFaviconUrl] = useState('') // '' = theme-coloured brand mark
   const [save, setSave] = useState<SaveState>('idle')
   const [err, setErr] = useState('')
 
@@ -51,6 +55,7 @@ export function ThemeEditor() {
     if (Array.isArray(p.theme?.recentAccents)) setRecentAccents(p.theme.recentAccents.slice(0, 5))
     setAccentInk(typeof p.theme?.accentInk === 'string' ? p.theme.accentInk : '')
     setAccentText(typeof p.theme?.accentText === 'string' ? p.theme.accentText : '')
+    setFaviconUrl(typeof p.faviconUrl === 'string' ? p.faviconUrl : '')
   }, [q.data])
 
   async function onSave() {
@@ -61,6 +66,7 @@ export function ThemeEditor() {
     const nextRecent = [accent, ...recentAccents.filter((c) => c.toLowerCase() !== accent.toLowerCase())].slice(0, 5)
     try {
       await saveProfile({
+        faviconUrl,
         theme: {
           accent,
           tileTheme,
@@ -73,6 +79,9 @@ export function ThemeEditor() {
       setRecentAccents(nextRecent)
       setSave('saved')
       void qc.invalidateQueries({ queryKey: adminKeys.profile })
+      // Swap the browser-tab icon immediately (AdminShell's sidebar re-reads it
+      // from the invalidated profile cache).
+      applyFavicon(faviconUrl || themeFaviconDataUrl(isHex6(accent) ? accent : ''))
     } catch (e) {
       setErr(e instanceof Error ? e.message : 'Couldn’t reach the server. Try again.')
       setSave('error')
@@ -127,7 +136,7 @@ export function ThemeEditor() {
       <header className="main-head">
         <div>
           <h1 className="page-title display">Theme</h1>
-          <p className="page-sub">Accent, button-label &amp; accent-text colours and the logo-tile background — with live contrast checks.</p>
+          <p className="page-sub">Accent, button-label &amp; accent-text colours, the logo-tile background and your site icon — with live contrast checks.</p>
         </div>
         <button type="button" className="btn btn-primary" onClick={onSave} disabled={save === 'saving' || !isHex}>
           {save === 'saving' ? 'Saving…' : save === 'saved' ? 'Save again' : 'Save theme'}
@@ -315,6 +324,49 @@ export function ThemeEditor() {
                     {t}
                   </button>
                 ))}
+              </div>
+            </div>
+          </div>
+        </section>
+
+        {/* Favicon — browser-tab icon for the whole site. Stored on the same
+            public_profile row (favicon_url) and saved in the same saveProfile
+            call as the theme, so "Save theme" covers both. */}
+        <section className="card">
+          <div className="card-head">
+            <span className="ico-badge"><ImageIcon size={18} aria-hidden="true" /></span>
+            <h2 className="card-title">Favicon</h2>
+          </div>
+          <p className="card-sub indent">The icon shown on the browser tab, across your whole site.</p>
+          <div className="card-body">
+            <div className="img-block">
+              <StudioImageSlot
+                value={faviconUrl}
+                onChange={setFaviconUrl}
+                folder="favicon"
+                shape="rounded"
+                className="slot-favicon"
+                placeholder="Drop favicon"
+                fallbackSrc={themeFaviconDataUrl(safeAccent)}
+                ariaLabel="Upload favicon"
+              />
+              <div>
+                <div className="ib-label">Site icon</div>
+                <div className="ib-help">
+                  This is your current browser-tab icon. By default it&rsquo;s your brand mark in your{' '}
+                  <strong>accent colour</strong> (it follows the accent above). Upload a square PNG to
+                  override it with a custom icon.
+                </div>
+                {faviconUrl && (
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-sm"
+                    style={{ marginTop: 10 }}
+                    onClick={() => setFaviconUrl('')}
+                  >
+                    <RotateCcw size={14} aria-hidden="true" /> Reset to theme default
+                  </button>
+                )}
               </div>
             </div>
           </div>

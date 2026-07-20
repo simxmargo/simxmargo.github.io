@@ -1,26 +1,20 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { Mail, ImageIcon, ShieldCheck, AlertTriangle, RotateCcw } from 'lucide-react'
+import { Mail, ShieldCheck, AlertTriangle, RotateCcw } from 'lucide-react'
 import { useQueryClient } from '@tanstack/react-query'
 import { saveSettings } from '@/lib/admin/resources/settings'
 import { useStore } from '@/lib/store'
 import { useAdminResource, adminKeys, type AdminFetchError } from '@/lib/admin/queries'
-import { StudioImageSlot } from '@/components/admin/StudioImageSlot'
 import { FormSkeleton } from '@/components/admin/Skeleton'
-import { themeFaviconDataUrl } from '@/lib/mediakit/favicon'
-import { applyFavicon } from '@/lib/applyFavicon'
-import type { PublicProfile } from '@/lib/mediakit-types'
 
-// App-config-only Studio Settings. All creator identity + outreach fields and the
-// public media-kit images now live on the Profile tab (they share the public_profile
-// row via /api/admin/profile). This page owns ONLY app config that persists to
-// app_settings via /api/admin/settings: the browser-tab favicon and the daily send
-// cap. Reads flow through the shared TanStack Query cache so navigating between admin
-// tabs never re-flashes the skeleton.
+// Outreach-only Studio Settings. All creator identity lives on the Profile tab and
+// the site favicon lives on the Theme tab (Media Kit) — this page owns ONLY app
+// config that persists to app_settings: the daily send cap. Reads flow through the
+// shared TanStack Query cache so navigating between admin tabs never re-flashes
+// the skeleton.
 
 interface SettingsData {
-  faviconUrl: string
   dailyCap: number
 }
 
@@ -30,12 +24,7 @@ export function SettingsPage() {
   const rehydrate = useStore((s) => s.hydrate)
   const qc = useQueryClient()
   const q = useAdminResource<SettingsData>('settings')
-  // The theme accent drives the DEFAULT favicon preview (same mark the browser tab +
-  // sidebar show when no custom icon is uploaded). Shared cache key with Theme/Profile.
-  const profileQ = useAdminResource<Partial<PublicProfile>>('profile')
-  const defaultFavicon = themeFaviconDataUrl(profileQ.data?.theme?.accent ?? '')
 
-  const [faviconUrl, setFaviconUrl] = useState('')
   const [dailyCap, setDailyCap] = useState(20)
   const [save, setSave] = useState<Save>('idle')
   const [saveErr, setSaveErr] = useState('')
@@ -44,14 +33,9 @@ export function SettingsPage() {
   // only re-runs when the underlying settings actually change.
   useEffect(() => {
     if (!q.data) return
-    setFaviconUrl(q.data.faviconUrl ?? '')
     setDailyCap(typeof q.data.dailyCap === 'number' ? q.data.dailyCap : 20)
   }, [q.data])
 
-  function onFavicon(url: string) {
-    setFaviconUrl(url)
-    if (save !== 'idle') setSave('idle')
-  }
   function setCap(n: number) {
     setDailyCap(n)
     if (save !== 'idle') setSave('idle')
@@ -61,13 +45,9 @@ export function SettingsPage() {
     setSave('saving')
     setSaveErr('')
     try {
-      await saveSettings({ faviconUrl, dailyCap })
+      await saveSettings({ dailyCap })
       setSave('saved')
       qc.invalidateQueries({ queryKey: adminKeys.settings })
-      // favicon_url lives on the profile row too (AdminShell reads it from there) —
-      // keep that cache honest AND swap the tab icon immediately for instant feedback.
-      qc.invalidateQueries({ queryKey: adminKeys.profile })
-      applyFavicon(faviconUrl || defaultFavicon)
       void rehydrate() // refresh the queue meter so it picks up the new daily cap
     } catch (e) {
       const msg = e instanceof Error ? e.message : ''
@@ -122,7 +102,7 @@ export function SettingsPage() {
       <header className="main-head">
         <div>
           <h1 className="page-title display">Settings</h1>
-          <p className="page-sub">App configuration — your site icon and outreach sending limits.</p>
+          <p className="page-sub">App configuration — your outreach sending limits.</p>
         </div>
         <button type="button" className="btn btn-primary" onClick={onSave} disabled={save === 'saving'}>
           {saveLabel}
@@ -154,47 +134,6 @@ export function SettingsPage() {
                 <button type="button" className="btn btn-ghost is-disabled" disabled title="Backend pending — see docs/BACKEND_DESIGN.md">
                   Connect Gmail
                 </button>
-              </div>
-            </div>
-          </div>
-        </section>
-
-        {/* Favicon — browser-tab icon for the whole site */}
-        <section className="card">
-          <div className="card-head">
-            <span className="ico-badge"><ImageIcon size={18} aria-hidden="true" /></span>
-            <h2 className="card-title">Favicon</h2>
-          </div>
-          <p className="card-sub indent">The icon shown on the browser tab, across your whole site.</p>
-          <div className="card-body">
-            <div className="img-block">
-              <StudioImageSlot
-                value={faviconUrl}
-                onChange={onFavicon}
-                folder="favicon"
-                shape="rounded"
-                className="slot-favicon"
-                placeholder="Drop favicon"
-                fallbackSrc={defaultFavicon}
-                ariaLabel="Upload favicon"
-              />
-              <div>
-                <div className="ib-label">Site icon</div>
-                <div className="ib-help">
-                  This is your current browser-tab icon. By default it&rsquo;s your brand mark in the{' '}
-                  <strong>theme colour</strong> (it follows the accent you pick in Theme). Upload a square
-                  PNG to override it with a custom icon.
-                </div>
-                {faviconUrl && (
-                  <button
-                    type="button"
-                    className="btn btn-ghost btn-sm"
-                    style={{ marginTop: 10 }}
-                    onClick={() => onFavicon('')}
-                  >
-                    <RotateCcw size={14} aria-hidden="true" /> Reset to theme default
-                  </button>
-                )}
               </div>
             </div>
           </div>
