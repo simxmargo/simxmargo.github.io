@@ -291,3 +291,218 @@ drop policy if exists "owner all" on collab_inquiries;
 create policy "owner all" on collab_inquiries
   for all to authenticated using (true) with check (true);
 
+-- ===== 0004_settings.sql =====
+-- 0004_settings.sql — identity columns for the redesigned Studio Settings page.
+--
+-- The Settings design ("fills your outreach emails AND your public media kit")
+-- makes public_profile the SINGLE identity source feeding both surfaces. These
+-- columns hold the outreach-facing identity that previously lived only in the
+-- app_settings.profile jsonb. followers/avg-views/engagement are NOT stored here
+-- — they derive from social_stats (source 'manual'|'api'); the future TikTok/IG/FB
+-- sync writes social_stats with source='api'.
+--
+-- Idempotent (add column if not exists). DDL is prod-safe; no data backfill.
+
+alter table public_profile add column if not exists handle          text not null default '';
+alter table public_profile add column if not exists audience        text not null default '';
+alter table public_profile add column if not exists reply_to_email  text not null default '';
+alter table public_profile add column if not exists mailing_address text not null default '';
+alter table public_profile add column if not exists media_kit_url    text not null default '';
+alter table public_profile add column if not exists cover_image_url  text not null default '';
+
+-- Note: the social-share thumbnail (og:image) continues to live in seo->>'og_image_url'.
+
+-- ===== 0005_favicon.sql =====
+-- Favicon: the browser-tab icon for the whole site (public kit + admin).
+-- Editable in Settings → uploaded to storage, URL stored here. A dedicated column
+-- (rather than the seo jsonb) keeps it typed and avoids read-merge-write clobber
+-- between the Profile route (which owns seo.og_image_url) and the Settings route.
+alter table public.public_profile add column if not exists favicon_url text;
+
+-- ===== 0006_brand_rows.sql =====
+-- Which marquee row a brand appears in on the public "brand partners" carousel.
+-- NULL ⇒ the page auto-splits the list in half (back-compat for existing rows).
+-- The "Top content" per-post fields (views/likes/caption) live inside the existing
+-- portfolio_brands.media jsonb, so they need no column change.
+alter table public.portfolio_brands
+  add column if not exists row_index smallint
+  check (row_index is null or row_index in (1, 2));
+
+-- ===== 0007_admin_rls.sql =====
+-- 0007_admin_rls.sql
+-- Switch the admin from "service-role bypasses RLS behind a server passphrase" to
+-- "authenticated admin, gated by RLS" — the prerequisite for a browser-only /admin SPA.
+--
+-- After applying (npm run db:apply):
+--   1) Create the admin auth user in the Supabase dashboard (Authentication → Users).
+--   2) Seed it below (uncomment + set the email), or run it once by hand:
+--        insert into public.admins (id)
+--          select id from auth.users where email = 'REPLACE_ME@example.com'
+--          on conflict do nothing;
+--   3) Supabase → Authentication → Settings: DISABLE public sign-ups (defense in depth).
+--
+-- SAFETY: this only tightens write access (owner-all-authenticated → is_admin()) and
+-- leaves the existing public read / anon-insert policies intact. The public site keeps
+-- working throughout.
+
+begin;
+
+-- ── Admin identity ────────────────────────────────────────────────────────────
+create table if not exists public.admins (
+  id        uuid primary key references auth.users(id) on delete cascade,
+  added_at  timestamptz not null default now()
+);
+alter table public.admins enable row level security;
+
+-- SECURITY DEFINER so it can read public.admins past that table's own RLS without
+-- recursion. STABLE so the planner can cache it within a statement.
+create or replace function public.is_admin()
+returns boolean
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select exists (select 1 from public.admins a where a.id = auth.uid());
+$$;
+
+revoke all on function public.is_admin() from public;
+grant execute on function public.is_admin() to anon, authenticated;
+
+-- Admins may read the admins list; inserts are intentionally service-role/SQL only
+-- (no self-grant). is_admin() (definer) still works regardless of this policy.
+drop policy if exists "admins read" on public.admins;
+create policy "admins read" on public.admins
+  for select to authenticated using (public.is_admin());
+
+-- Idempotency: drop the new "admin all" policies first so re-running this migration
+-- (db:apply re-runs every file) doesn't error on already-existing policies.
+drop policy if exists "admin all" on public.public_profile;
+drop policy if exists "admin all" on public.portfolio_brands;
+drop policy if exists "admin all" on public.social_stats;
+drop policy if exists "admin all" on public.collab_inquiries;
+drop policy if exists "admin all" on public.contacts;
+drop policy if exists "admin all" on public.app_settings;
+drop policy if exists "admin all" on public.scrape_jobs;
+drop policy if exists "admin all" on public.send_queue;
+drop policy if exists "admin all" on public.suppression_list;
+
+-- ── Media-kit tables: keep public reads, replace owner-all with is_admin() ──────
+-- public_profile (single row id=1)
+drop policy if exists "owner all" on public.public_profile;
+create policy "admin all" on public.public_profile
+  for all to authenticated using (public.is_admin()) with check (public.is_admin());
+
+-- portfolio_brands
+drop policy if exists "owner all" on public.portfolio_brands;
+create policy "admin all" on public.portfolio_brands
+  for all to authenticated using (public.is_admin()) with check (public.is_admin());
+
+-- social_stats
+drop policy if exists "owner all" on public.social_stats;
+create policy "admin all" on public.social_stats
+  for all to authenticated using (public.is_admin()) with check (public.is_admin());
+
+-- collab_inquiries: keep the anon INSERT policy; admin gets read/update/delete
+drop policy if exists "owner all" on public.collab_inquiries;
+create policy "admin all" on public.collab_inquiries
+  for all to authenticated using (public.is_admin()) with check (public.is_admin());
+
+-- ── Outreach / config tables: admin-only (no public access) ─────────────────────
+drop policy if exists "owner all" on public.contacts;
+create policy "admin all" on public.contacts
+  for all to authenticated using (public.is_admin()) with check (public.is_admin());
+
+drop policy if exists "owner all" on public.app_settings;
+create policy "admin all" on public.app_settings
+  for all to authenticated using (public.is_admin()) with check (public.is_admin());
+
+drop policy if exists "owner all" on public.scrape_jobs;
+create policy "admin all" on public.scrape_jobs
+  for all to authenticated using (public.is_admin()) with check (public.is_admin());
+
+drop policy if exists "owner all" on public.send_queue;
+create policy "admin all" on public.send_queue
+  for all to authenticated using (public.is_admin()) with check (public.is_admin());
+
+drop policy if exists "owner all" on public.suppression_list;
+create policy "admin all" on public.suppression_list
+  for all to authenticated using (public.is_admin()) with check (public.is_admin());
+
+-- ── Storage: 'media' bucket = public read, admin-only writes ────────────────────
+insert into storage.buckets (id, name, public)
+  values ('media', 'media', true)
+  on conflict (id) do nothing;
+
+drop policy if exists "media public read" on storage.objects;
+create policy "media public read" on storage.objects
+  for select to anon, authenticated using (bucket_id = 'media');
+
+drop policy if exists "media admin insert" on storage.objects;
+create policy "media admin insert" on storage.objects
+  for insert to authenticated with check (bucket_id = 'media' and public.is_admin());
+
+drop policy if exists "media admin update" on storage.objects;
+create policy "media admin update" on storage.objects
+  for update to authenticated
+  using (bucket_id = 'media' and public.is_admin())
+  with check (bucket_id = 'media' and public.is_admin());
+
+drop policy if exists "media admin delete" on storage.objects;
+create policy "media admin delete" on storage.objects
+  for delete to authenticated using (bucket_id = 'media' and public.is_admin());
+
+-- ── Seed the admin (the influencer's account; idempotent) ───────────────────────
+insert into public.admins (id)
+  select id from auth.users where email = 'simxmargo.collab@gmail.com'
+  on conflict do nothing;
+
+commit;
+
+-- ===== 0008_brand_campaign_fields.sql =====
+-- Per-brand campaign fields for the public brand-detail modal.
+--
+-- These power the modal's START / END / TOTAL VIEWS stats. They are MANUAL and
+-- NULLABLE on purpose: a blank field renders a quiet "~" empty state in the modal
+-- (never a fabricated date or count). DELIVERABLES stays DERIVED from the existing
+-- media[] jsonb (count of top-content pieces) on the client, so it needs no column.
+--
+-- Idempotent (add column if not exists) — safe to re-run. Apply with
+-- `npm run db:apply`. Existing portfolio_brands rows are untouched (all columns null).
+alter table public.portfolio_brands
+  add column if not exists start_date  date,
+  add column if not exists end_date    date,
+  add column if not exists total_views bigint;
+
+-- ===== 0009_show_rates.sql =====
+-- Per-profile toggle to HIDE the public "Rates" section without deleting the rate
+-- card. Defaults true so existing profiles keep showing rates (no behaviour change
+-- until the admin turns it off). Parallels public_profile.is_published. Idempotent.
+alter table public_profile
+  add column if not exists show_rates boolean not null default true;
+
+-- ===== 0010_content_copy.sql =====
+-- 0010_content_copy.sql
+-- Admin-editable marketing copy for strings that were previously hardcoded in the
+-- public media-kit components — starting with the footer headline.
+--
+-- One jsonb map keyed by copy-slot (e.g. footerHeadline, footerEmphasis) rather than a
+-- column per string, so making another section editable later is just a new key + a
+-- form field — no migration per string. Any missing key falls back to DEFAULT_SITE_COPY
+-- in the app (lib/mediakit-types.ts), so existing rows render correctly with no backfill.
+--
+-- Idempotent (add column if not exists) — safe to re-run via `npm run db:apply`.
+-- RLS is unchanged: public_profile already has the admin-write (is_admin) + public-read
+-- policies from 0007, and they apply to every column including this one.
+alter table public.public_profile
+  add column if not exists content jsonb not null default '{}'::jsonb;
+
+-- ===== 0011_show_rates_section.sql =====
+-- Per-profile toggle to HIDE the whole public "Rates" section (its heading, the
+-- rate list, and the "Rates" nav link) — independent of `show_rates` (0009), which
+-- only swaps the PRICES for a "Let's talk" invite while the section still renders.
+-- Two orthogonal controls: this one removes the section entirely; show_rates dims
+-- pricing within it. Defaults true so existing profiles are unchanged until the
+-- admin turns it off. Idempotent.
+alter table public_profile
+  add column if not exists show_rates_section boolean not null default true;
