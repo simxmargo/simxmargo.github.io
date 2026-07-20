@@ -295,6 +295,20 @@ the admin). The deployed page is built to survive that fully:
   good deploy stays up; restore the project in the Supabase dashboard, then re-run the
   workflow. (Local `next dev`/non-export builds keep the mock fallback.)
 
+### 7c. Keep-alive + offline backups (added 2026-07-20)
+
+Two more layers close the *deletion* end of the free-tier chain (7-day pause →
+90-day restore window → project deleted, zero snapshots kept on Free):
+
+- **`.github/workflows/keepalive.yml`** pings Supabase REST Mon+Thu so the
+  7-day pause clock never runs out; a non-200 fails the run (GitHub emails you)
+  so a pause is noticed immediately. GitHub disables schedules after ~60 days
+  of repo inactivity — it emails first; a push or one click re-arms.
+- **`npm run backup`** (`scripts/backup.mjs`) dumps all tables + the auth user
+  + every `media` Storage object to `backups/<stamp>/` (gitignored — the dumps
+  hold PII and this repo is public). Run it after meaningful admin sessions.
+  The script header documents the full restore-into-a-fresh-project runbook.
+
 ---
 
 ## 8. Connect the repo (you run git — local change only)
