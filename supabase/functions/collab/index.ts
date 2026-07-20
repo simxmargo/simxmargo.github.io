@@ -13,7 +13,7 @@
 // reply_to is the submitter, so replying goes straight to the brand.
 //
 // Transport: Gmail SMTP — set GMAIL_SMTP_PASSWORD (a Google App Password for
-// simxmargo.collab@gmail.com; the account needs 2-Step Verification ON).
+// simxmargo.collabs@gmail.com; the account needs 2-Step Verification ON).
 // Gmail→same-Gmail, so deliverability is a non-issue. Optional GMAIL_SMTP_USER
 // overrides the account; optional COLLAB_NOTIFY_TO overrides the recipient.
 //
@@ -79,7 +79,7 @@ async function sendViaGmail(
 // Best-effort notification to the influencer. Never throws — the inquiry is already
 // saved by the time this runs, so any failure here is logged and swallowed.
 async function notifyByEmail(inq: InquiryEmail): Promise<void> {
-  const to = Deno.env.get('COLLAB_NOTIFY_TO') || 'simxmargo.collab@gmail.com'
+  const to = Deno.env.get('COLLAB_NOTIFY_TO') || 'simxmargo.collabs@gmail.com'
   const subject = `New collab brief — ${inq.name}${inq.company ? ` · ${inq.company}` : ''}`
   const lines = [
     `Name: ${inq.name}`,
@@ -96,7 +96,7 @@ async function notifyByEmail(inq: InquiryEmail): Promise<void> {
   const text = lines.join('\n')
 
   const gmailPass = Deno.env.get('GMAIL_SMTP_PASSWORD')
-  const gmailUser = Deno.env.get('GMAIL_SMTP_USER') || 'simxmargo.collab@gmail.com'
+  const gmailUser = Deno.env.get('GMAIL_SMTP_USER') || 'simxmargo.collabs@gmail.com'
   try {
     if (gmailPass) {
       await sendViaGmail(gmailUser, gmailPass, to, inq.email, subject, text)
