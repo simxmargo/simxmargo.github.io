@@ -29,5 +29,9 @@ supabase/.temp
 # Pre-Next-migration restore point
 .backup-premigration.tar.gz
 
+# Offline Supabase backups (npm run backup) — hold PII (inquiries, contacts)
+# and the repo is PUBLIC. Never commit; copy somewhere private instead.
+backups/
+
 # Playwright MCP snapshots
 .playwright-mcp/
