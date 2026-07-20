@@ -27,8 +27,9 @@ export function MediaKitLive({ initial }: { initial: MediaKitData }) {
 
   useEffect(() => {
     let cancelled = false
-    getMediaKitClient().then((fresh) => {
-      if (!cancelled && fresh) {
+    const run = () => {
+      getMediaKitClient().then((fresh) => {
+        if (cancelled || !fresh) return
         setData(fresh)
         // The baked <head> favicon is whatever existed at BUILD time — let the live
         // value win (uploaded icon, else the current theme mark). A failed read
@@ -36,10 +37,27 @@ export function MediaKitLive({ initial }: { initial: MediaKitData }) {
         applyFavicon(
           fresh.profile.faviconUrl || themeFaviconDataUrl(fresh.profile.theme?.accent ?? ''),
         )
-      }
-    })
+      })
+    }
+    // Defer the live upgrade OUT of the critical load path. The baked snapshot is
+    // already current (rebuilt every deploy) and uses fast localized /snap/ images;
+    // fetching live rows would re-load their raw Supabase Storage URLs, so doing it
+    // during initial render made the browser re-download the portrait + logos and
+    // held the `load` event open. requestIdleCallback runs it once the main thread
+    // is free (so a busy/backgrounded tab loads its snapshot first, then upgrades),
+    // with a setTimeout fallback where the API is unavailable.
+    const ric = window as typeof window & {
+      requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number
+      cancelIdleCallback?: (id: number) => void
+    }
+    let idleId = 0
+    let timeoutId = 0
+    if (typeof ric.requestIdleCallback === 'function') idleId = ric.requestIdleCallback(run, { timeout: 3000 })
+    else timeoutId = window.setTimeout(run, 1500)
     return () => {
       cancelled = true
+      if (idleId && typeof ric.cancelIdleCallback === 'function') ric.cancelIdleCallback(idleId)
+      if (timeoutId) clearTimeout(timeoutId)
     }
   }, [])
 
