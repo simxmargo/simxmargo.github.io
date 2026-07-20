@@ -192,27 +192,31 @@ async function notifyByEmail(inq: Inquiry, receivedAt: Date): Promise<boolean> {
 
   const text = normalizePunct([...briefLines, '', ...contactLines, '', '---', footer].join('\n'))
 
-  // HTML alternative — same order, with the footer bolded/emphasized.
+  // HTML alternative — plain default-Gmail typography (Arial, near-black, tight
+  // line-height). Two zones: the DETAILS lead reads like a typed message body —
+  // left-aligned, one step smaller (13px). Below it, the retained "detail card"
+  // (Package, a divider, the contact table, the bold footer) is CENTERED as a block.
   const row = (label: string, value: string) =>
-    `<tr><td style="padding:3px 14px 3px 0;color:#8a8a8a;white-space:nowrap;">${label}</td>` +
-    `<td style="padding:3px 0;color:#1a1a1a;">${value}</td></tr>`
+    `<tr><td style="padding:2px 16px 2px 0;color:#777;vertical-align:top;white-space:nowrap;">${label}</td>` +
+    `<td style="padding:2px 0;">${value}</td></tr>`
   const html = normalizePunct(
-    `<div style="max-width:560px;margin:0 auto;padding:8px 4px;` +
-      `font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#1a1a1a;">` +
-      `<div style="font-size:15px;line-height:1.6;white-space:pre-wrap;">${escapeHtml(inq.message)}</div>` +
-      (inq.deliverables.length
-        ? `<p style="margin:14px 0 0;font-size:14px;color:#333;"><strong>Package:</strong> ${escapeHtml(inq.deliverables.join(', '))}</p>`
-        : '') +
-      (inq.budget
-        ? `<p style="margin:4px 0 0;font-size:14px;color:#333;"><strong>Budget:</strong> ${escapeHtml(inq.budget)}</p>`
-        : '') +
-      `<table style="margin-top:20px;padding-top:16px;border-top:1px solid #e6e6e6;font-size:14px;border-collapse:collapse;">` +
-      (inq.company ? row('Brand', escapeHtml(inq.company)) : '') +
-      row('Name', escapeHtml(inq.name)) +
-      row('Email', `<a href="mailto:${escapeHtml(inq.email)}" style="color:#1a1a1a;">${escapeHtml(inq.email)}</a>`) +
-      row('Received', escapeHtml(received)) +
-      `</table>` +
-      `<p style="margin:22px 0 0;font-size:13px;line-height:1.5;color:#555;"><strong>${escapeHtml(footer)}</strong></p>` +
+    `<div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.4;color:#222;">` +
+      `<div style="font-size:13px;line-height:1.45;white-space:pre-wrap;">${escapeHtml(inq.message)}</div>` +
+      `<div style="text-align:center;margin-top:18px;">` +
+        (inq.deliverables.length
+          ? `<p style="margin:0;"><strong>Package:</strong> ${escapeHtml(inq.deliverables.join(', '))}</p>`
+          : '') +
+        (inq.budget ? `<p style="margin:2px 0 0;"><strong>Budget:</strong> ${escapeHtml(inq.budget)}</p>` : '') +
+        `<div style="display:inline-block;text-align:left;border-top:1px solid #e6e6e6;padding-top:12px;margin-top:12px;">` +
+          `<table style="border-collapse:collapse;">` +
+          (inq.company ? row('Brand', escapeHtml(inq.company)) : '') +
+          row('Name', escapeHtml(inq.name)) +
+          row('Email', `<a href="mailto:${escapeHtml(inq.email)}" style="color:#1155cc;">${escapeHtml(inq.email)}</a>`) +
+          row('Received', escapeHtml(received)) +
+          `</table>` +
+        `</div>` +
+        `<p style="margin:14px 0 0;"><strong>${escapeHtml(footer)}</strong></p>` +
+      `</div>` +
       `</div>`,
   )
 
