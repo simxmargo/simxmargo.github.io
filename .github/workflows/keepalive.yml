@@ -1,0 +1,44 @@
+# Keeps the free-tier Supabase project from pausing.
+#
+# Supabase pauses Free projects after ~7 days without API activity, and a
+# project paused 90+ days has its infrastructure released and is eventually
+# deleted (Free keeps zero backup snapshots). One authenticated REST read
+# counts as activity, so this pings twice a week — the pause clock never
+# reaches 7 days and the 90-day deletion chain never starts.
+#
+# Same no-secrets convention as pages.yml: the URL + publishable anon key are
+# already shipped in the public browser bundle, so hardcoding them here adds
+# zero exposure. Rotating the key = editing the env lines below (and pages.yml).
+#
+# If this run FAILS (red X + GitHub failure email), the project is likely
+# already paused → restore it in the Supabase dashboard, re-run this workflow,
+# then `npm run backup` locally for a fresh offline copy.
+#
+# ⚠ GitHub auto-disables scheduled workflows after ~60 days without repo
+# activity (it emails a warning first; any push or one "Enable workflow" click
+# re-arms it). So expiry now requires BOTH systems to sit idle for months.
+name: Keep Supabase active
+on:
+  schedule:
+    - cron: '0 3 * * 1,4' # Mon + Thu 03:00 UTC — comfortably inside the 7-day window
+  workflow_dispatch: {}
+
+permissions: {}
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping Supabase REST (counts as project activity)
+        env:
+          SUPABASE_URL: https://zzgypushqcpchfxrjexc.supabase.co
+          SUPABASE_ANON_KEY: sb_publishable_DZxoO2dE_YVKvr1jkBkoDg_G5XxILGn
+        run: |
+          code=$(curl -s -o /tmp/body -w '%{http_code}' \
+            -H "apikey: $SUPABASE_ANON_KEY" \
+            -H "Authorization: Bearer $SUPABASE_ANON_KEY" \
+            "$SUPABASE_URL/rest/v1/public_profile?select=id&limit=1")
+          echo "HTTP $code — $(cat /tmp/body)"
+          # Anything but 200 (e.g. the project is paused) fails the run so
+          # GitHub emails a warning instead of the pause going unnoticed.
+          [ "$code" = "200" ]
