@@ -104,10 +104,23 @@ async function sendViaGmail(
   }
 }
 
+// Format a receipt time in the influencer's local timezone (Manila) for the email.
+function formatReceived(at: Date): string {
+  try {
+    return new Intl.DateTimeFormat('en-US', {
+      timeZone: 'Asia/Manila',
+      dateStyle: 'medium',
+      timeStyle: 'short',
+    }).format(at) + ' PHT'
+  } catch {
+    return at.toUTCString()
+  }
+}
+
 // Notify the influencer. Returns true if the email was sent, false otherwise
 // (missing transport secret, or a send failure). Never throws — the caller
 // decides what to do with the outcome.
-async function notifyByEmail(inq: Inquiry): Promise<boolean> {
+async function notifyByEmail(inq: Inquiry, receivedAt: Date): Promise<boolean> {
   const gmailPass = Deno.env.get('GMAIL_SMTP_PASSWORD')
   if (!gmailPass) {
     console.error('[collab] GMAIL_SMTP_PASSWORD not set — email notification skipped')
@@ -119,6 +132,7 @@ async function notifyByEmail(inq: Inquiry): Promise<boolean> {
   const subject = asciiSubject(`New collab brief: ${inq.name}${inq.company ? ` (${inq.company})` : ''}`)
   const text = normalizePunct(
     [
+      `Received: ${formatReceived(receivedAt)}`,
       `Name: ${inq.name}`,
       `Email: ${inq.email}`,
       inq.company ? `Brand: ${inq.company}` : '',
@@ -128,7 +142,7 @@ async function notifyByEmail(inq: Inquiry): Promise<boolean> {
       inq.message,
       '',
       '---',
-      `Sent from ${inq.sourcePath}. Reply to this email to answer ${inq.name} directly.`,
+      `Submitted through your simxmargo media kit (Work with me form). Reply to this email to answer ${inq.name} directly.`,
     ]
       .filter((l, i, a) => l !== '' || a[i - 1] !== '') // collapse double blanks
       .join('\n'),
@@ -173,10 +187,11 @@ Deno.serve(async (req) => {
   const deliverables = Array.isArray(body.deliverables) ? body.deliverables.map(String).slice(0, 20) : []
   const sourcePath = String(body.sourcePath ?? '/')
   const inq: Inquiry = { name, email, company, budget, deliverables, message, sourcePath }
+  const receivedAt = new Date()
 
   // 1) EMAIL FIRST — the guaranteed record. Even if Supabase is paused/offline,
   //    the brand's brief still reaches the inbox.
-  const emailSent = await notifyByEmail(inq)
+  const emailSent = await notifyByEmail(inq, receivedAt)
 
   // 2) Best-effort DB write — a triage record in the studio Inbox when online.
   //    A failure here never loses the inquiry (the email already carries it).

@@ -59,10 +59,18 @@ function statusLabel(s: InquiryStatus): string {
   return STATUS_OPTIONS.find((o) => o.value === s)?.label ?? s
 }
 
+// Date + time in the viewer's local timezone, so you can see exactly when an
+// inquiry was received (created_at is stored UTC; toLocaleString localizes it).
 function formatDate(iso: string): string {
   const d = new Date(iso)
   if (Number.isNaN(d.getTime())) return iso
-  return d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })
+  return d.toLocaleString(undefined, {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  })
 }
 
 export function InquiriesInbox() {
