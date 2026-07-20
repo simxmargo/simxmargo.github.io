@@ -20,10 +20,9 @@ import { useAdminResource, adminKeys, AdminFetchError } from '@/lib/admin/querie
 import { ListSkeleton } from '@/components/admin/Skeleton'
 
 // Triage inbox for the public "Work with me" form (collab_inquiries).
-// Reads via the shared admin query cache (key adminKeys.inquiries); PATCH { id, status } per row.
-// Reads/writes both need SUPABASE_SERVICE_ROLE_KEY on the server:
-//  - GET may return { note } instead of { data } → friendly empty state + amber line.
-//  - PATCH may 503 (key unset) → calm amber banner.
+// Reads via the shared admin query cache (key adminKeys.inquiries) — the resource
+// (readInquiries) returns the rows array directly through the admin RLS SELECT, no
+// service-role key. PATCH { id, status } per row (RLS is_admin() gates the write).
 
 type InquiryStatus = 'new' | 'read' | 'replied' | 'archived' | 'spam'
 
@@ -37,12 +36,6 @@ interface Inquiry {
   deliverables: string[]
   status: InquiryStatus
   created_at: string
-}
-
-// Shape parsed from GET /api/admin/inquiries (the same wrapper the old fetch read).
-interface InquiriesResponse {
-  data?: Inquiry[]
-  note?: string
 }
 
 const STATUS_OPTIONS: { value: InquiryStatus; label: string }[] = [
@@ -74,30 +67,21 @@ function formatDate(iso: string): string {
 
 export function InquiriesInbox() {
   const qc = useQueryClient()
-  const q = useAdminResource<InquiriesResponse>('inquiries')
+  const q = useAdminResource<Inquiry[]>('inquiries')
 
   const [inquiries, setInquiries] = useState<Inquiry[]>([])
-  const [note, setNote] = useState<string | null>(null) // service-role-required hint from GET
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [savingId, setSavingId] = useState<string | null>(null)
   const [savedId, setSavedId] = useState<string | null>(null)
   const [saveBlocked, setSaveBlocked] = useState<boolean>(false) // PATCH 503
   const [saveError, setSaveError] = useState<string | null>(null)
 
-  // Seed local editable state from cached query data. q.data is a stable reference
-  // while cached, so this runs only on first load + after an invalidation — the
-  // same parse the old fetch's .then ran (note → empty + amber; else rows).
+  // The inquiries resource returns the rows array directly. Seed local editable state
+  // from it; q.data is a stable reference while cached, so this runs only on first
+  // load + after an invalidation.
   useEffect(() => {
     if (!q.data) return
-    const payload = q.data
-    // GET may return { note } (service-role required) instead of rows.
-    if (payload.note) {
-      setNote(payload.note)
-      setInquiries([])
-      return
-    }
-    setNote(null)
-    setInquiries(Array.isArray(payload.data) ? payload.data : [])
+    setInquiries(Array.isArray(q.data) ? q.data : [])
   }, [q.data])
 
   const loading = q.isLoading
@@ -154,7 +138,7 @@ export function InquiriesInbox() {
             Triage messages from your public media kit — read, reply, archive, or flag spam.
           </p>
         </div>
-        {!loading && !note && inquiries.length > 0 && (
+        {!loading && inquiries.length > 0 && (
           <span className="chip">
             {inquiries.length} {inquiries.length === 1 ? 'inquiry' : 'inquiries'}
           </span>
@@ -207,15 +191,6 @@ export function InquiriesInbox() {
                 Messages from your public &ldquo;Work with me&rdquo; form will appear here.
               </p>
             </div>
-            {note && (
-              <p
-                className="inline-flex items-center gap-2 banner banner-warn"
-                style={{ marginTop: 16, justifyContent: 'center' }}
-              >
-                <AlertTriangle size={16} aria-hidden="true" />
-                Reading inquiries needs SUPABASE_SERVICE_ROLE_KEY.
-              </p>
-            )}
           </div>
         )}
 
