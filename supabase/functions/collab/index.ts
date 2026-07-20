@@ -61,6 +61,22 @@ function asciiSubject(s: string): string {
     .slice(0, 120)
 }
 
+// The From ADDRESS is forced to the authenticated Gmail account — you cannot send
+// AS the brand's address (that's spoofing; SPF/DKIM/DMARC block it). So the brand
+// is surfaced two ways instead: their NAME becomes the From display label (scannable
+// in the inbox) and their EMAIL becomes Reply-To (hitting Reply answers the brand).
+// Strip chars that would break/confuse a From header; hyphen-join name + company.
+function displayNameFor(inq: Inquiry): string {
+  const raw = `${inq.name}${inq.company ? ` - ${inq.company}` : ''}`
+  const clean = normalizePunct(raw)
+    .replace(/[^\x20-\x7E]/g, '')
+    .replace(/["<>@,;:()\\]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 78)
+  return clean || 'New collab brief'
+}
+
 interface Inquiry {
   name: string
   email: string
@@ -77,6 +93,7 @@ interface Inquiry {
 async function sendViaGmail(
   user: string,
   pass: string,
+  from: string,
   to: string,
   replyTo: string,
   subject: string,
@@ -92,7 +109,7 @@ async function sendViaGmail(
   })
   try {
     await Promise.race([
-      client.send({ from: `simxmargo media kit <${user}>`, to, replyTo, subject, content: text }),
+      client.send({ from, to, replyTo, subject, content: text }),
       new Promise((_, reject) => setTimeout(() => reject(new Error('SMTP send timed out (15s)')), 15_000)),
     ])
   } finally {
@@ -148,8 +165,11 @@ async function notifyByEmail(inq: Inquiry, receivedAt: Date): Promise<boolean> {
       .join('\n'),
   )
 
+  // From: the brand's name as the display label, the authenticated account as the
+  // address (required); Reply-To (inq.email) routes replies to the brand.
+  const from = `${displayNameFor(inq)} <${gmailUser}>`
   try {
-    await sendViaGmail(gmailUser, gmailPass, to, inq.email, subject, text)
+    await sendViaGmail(gmailUser, gmailPass, from, to, inq.email, subject, text)
     return true
   } catch (err) {
     console.error('[collab] email notify failed:', err instanceof Error ? err.message : err)
