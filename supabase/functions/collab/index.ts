@@ -1,16 +1,15 @@
-// `collab` Edge Function — public "Work with me" submissions → collab_inquiries
-// + an email notification to the influencer's inbox.
+// `collab` Edge Function — public "Work with me" submissions → an email
+// notification to the influencer's inbox, then a best-effort record in Supabase.
 //
 // The static site has no server, so the public media-kit form POSTs here (via
-// supabase.functions.invoke in lib/mediakit/collab.ts). Honeypot, server-side
-// validation mirroring the DB CHECKs, and a salted SHA-256 of the caller IP (the
-// raw IP is never stored). Inserts with the ANON key, so RLS is the boundary (the
-// policy only allows status='new' + a non-empty message).
+// supabase.functions.invoke in lib/mediakit/collab.ts). Honeypot + server-side
+// validation mirroring the DB CHECKs run first.
 //
-// Email is BEST-EFFORT and strictly insert-first: the inquiry is always saved
-// (and visible in the studio Inquiries inbox) even when no transport is configured
-// or the send fails — failures are logged, never surfaced as a form error.
-// reply_to is the submitter, so replying goes straight to the brand.
+// ORDER MATTERS (resilience): the EMAIL is sent FIRST — it is the guaranteed
+// record, so a brand's brief still reaches the inbox even when the free-tier
+// Supabase project is PAUSED/offline. The DB insert (a triage record in the
+// studio Inbox) is then BEST-EFFORT: if it fails, the request still succeeds as
+// long as the email went out. The request only fails (502) if BOTH channels fail.
 //
 // Transport: Gmail SMTP — set GMAIL_SMTP_PASSWORD (a Google App Password for
 // simxmargo.collabs@gmail.com; the account needs 2-Step Verification ON).
@@ -33,7 +32,36 @@ async function sha256Hex(input: string): Promise<string> {
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('')
 }
 
-interface InquiryEmail {
+// Map the common "smart" Unicode punctuation brands paste (em/en dashes, curly
+// quotes, ellipsis, middle dot, nbsp) to plain ASCII. denomailer 1.6.0 mangles a
+// long non-ASCII SUBJECT — its encoded-word folding broke the header block and
+// spilled the headers into the body as raw quoted-printable ("=e2=80=94"). Keeping
+// our generated text ASCII sidesteps that entirely.
+const PUNCT: Record<string, string> = {
+  '—': '-', '–': '-', '‒': '-', // em / en / figure dash
+  '‘': "'", '’': "'", // curly single quotes
+  '“': '"', '”': '"', // curly double quotes
+  '…': '...', // ellipsis
+  '·': '-', '•': '-', // middle dot / bullet
+  ' ': ' ', // non-breaking space
+}
+const PUNCT_RE = /[—–‒‘’“”…·• ]/g
+function normalizePunct(s: string): string {
+  return s.replace(PUNCT_RE, (c) => PUNCT[c] ?? c)
+}
+
+// Subjects MUST be a clean single-line header. Normalize punctuation, strip any
+// remaining non-printable-ASCII, collapse whitespace, and cap the length so no
+// encoded-word / folding is ever produced.
+function asciiSubject(s: string): string {
+  return normalizePunct(s)
+    .replace(/[^\x20-\x7E]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 120)
+}
+
+interface Inquiry {
   name: string
   email: string
   company: string
@@ -43,7 +71,7 @@ interface InquiryEmail {
   sourcePath: string
 }
 
-// Transport 1 — Gmail SMTP (App Password; the account needs 2-Step Verification).
+// Transport — Gmail SMTP (App Password; the account needs 2-Step Verification).
 // Port 465 implicit TLS (STARTTLS on 587 is flaky from Edge Functions). The client
 // is closed in finally so a timed-out send can't leak the connection.
 async function sendViaGmail(
@@ -76,37 +104,42 @@ async function sendViaGmail(
   }
 }
 
-// Best-effort notification to the influencer. Never throws — the inquiry is already
-// saved by the time this runs, so any failure here is logged and swallowed.
-async function notifyByEmail(inq: InquiryEmail): Promise<void> {
-  const to = Deno.env.get('COLLAB_NOTIFY_TO') || 'simxmargo.collabs@gmail.com'
-  const subject = `New collab brief — ${inq.name}${inq.company ? ` · ${inq.company}` : ''}`
-  const lines = [
-    `Name: ${inq.name}`,
-    `Email: ${inq.email}`,
-    inq.company ? `Brand: ${inq.company}` : '',
-    inq.budget ? `Budget: ${inq.budget}` : '',
-    inq.deliverables.length ? `Package: ${inq.deliverables.join(', ')}` : '',
-    '',
-    inq.message,
-    '',
-    '—',
-    `Sent from ${inq.sourcePath} · reply to this email to answer ${inq.name} directly.`,
-  ].filter((l, i, a) => l !== '' || a[i - 1] !== '') // collapse double blanks
-  const text = lines.join('\n')
-
+// Notify the influencer. Returns true if the email was sent, false otherwise
+// (missing transport secret, or a send failure). Never throws — the caller
+// decides what to do with the outcome.
+async function notifyByEmail(inq: Inquiry): Promise<boolean> {
   const gmailPass = Deno.env.get('GMAIL_SMTP_PASSWORD')
+  if (!gmailPass) {
+    console.error('[collab] GMAIL_SMTP_PASSWORD not set — email notification skipped')
+    return false
+  }
   const gmailUser = Deno.env.get('GMAIL_SMTP_USER') || 'simxmargo.collabs@gmail.com'
+  const to = Deno.env.get('COLLAB_NOTIFY_TO') || 'simxmargo.collabs@gmail.com'
+
+  const subject = asciiSubject(`New collab brief: ${inq.name}${inq.company ? ` (${inq.company})` : ''}`)
+  const text = normalizePunct(
+    [
+      `Name: ${inq.name}`,
+      `Email: ${inq.email}`,
+      inq.company ? `Brand: ${inq.company}` : '',
+      inq.budget ? `Budget: ${inq.budget}` : '',
+      inq.deliverables.length ? `Package: ${inq.deliverables.join(', ')}` : '',
+      '',
+      inq.message,
+      '',
+      '---',
+      `Sent from ${inq.sourcePath}. Reply to this email to answer ${inq.name} directly.`,
+    ]
+      .filter((l, i, a) => l !== '' || a[i - 1] !== '') // collapse double blanks
+      .join('\n'),
+  )
+
   try {
-    if (gmailPass) {
-      await sendViaGmail(gmailUser, gmailPass, to, inq.email, subject, text)
-    } else {
-      console.error(
-        '[collab] GMAIL_SMTP_PASSWORD not set — inquiry saved, email notification skipped',
-      )
-    }
+    await sendViaGmail(gmailUser, gmailPass, to, inq.email, subject, text)
+    return true
   } catch (err) {
     console.error('[collab] email notify failed:', err instanceof Error ? err.message : err)
+    return false
   }
 }
 
@@ -123,7 +156,7 @@ Deno.serve(async (req) => {
   }
   if (!body) return json({ error: 'Empty body' }, 400)
 
-  // Honeypot: a bot fills the hidden "website" field. Pretend success, store nothing.
+  // Honeypot: a bot fills the hidden "website" field. Pretend success, do nothing.
   if (typeof body.website === 'string' && body.website.trim() !== '') {
     return json({ ok: true })
   }
@@ -135,42 +168,44 @@ Deno.serve(async (req) => {
   if (!EMAIL_RE.test(email)) return json({ error: 'Please enter a valid email.' }, 400)
   if (message.length < 1 || message.length > 4000) return json({ error: 'Please include a message.' }, 400)
 
+  const company = String(body.company ?? '').slice(0, 160)
+  const budget = String(body.budget ?? '').slice(0, 120)
   const deliverables = Array.isArray(body.deliverables) ? body.deliverables.map(String).slice(0, 20) : []
-  const ipRaw = (req.headers.get('x-forwarded-for') ?? '').split(',')[0]?.trim()
-  const ipHash = ipRaw ? (await sha256Hex(ipRaw + IP_SALT)).slice(0, 32) : ''
+  const sourcePath = String(body.sourcePath ?? '/')
+  const inq: Inquiry = { name, email, company, budget, deliverables, message, sourcePath }
 
-  const supabase = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_ANON_KEY')!, {
-    auth: { persistSession: false, autoRefreshToken: false },
-  })
+  // 1) EMAIL FIRST — the guaranteed record. Even if Supabase is paused/offline,
+  //    the brand's brief still reaches the inbox.
+  const emailSent = await notifyByEmail(inq)
 
-  const { error } = await supabase.from('collab_inquiries').insert({
-    name,
-    email,
-    company: String(body.company ?? '').slice(0, 160),
-    budget: String(body.budget ?? '').slice(0, 120),
-    message,
-    deliverables,
-    source_path: String(body.sourcePath ?? '/'),
-    ip_hash: ipHash,
-    user_agent: (req.headers.get('user-agent') ?? '').slice(0, 300),
-    status: 'new',
-  })
-
-  if (error) {
-    console.error('[collab] insert failed:', error.message)
-    return json({ error: 'Could not submit right now. Please email me directly.' }, 502)
+  // 2) Best-effort DB write — a triage record in the studio Inbox when online.
+  //    A failure here never loses the inquiry (the email already carries it).
+  let dbSaved = false
+  try {
+    const ipRaw = (req.headers.get('x-forwarded-for') ?? '').split(',')[0]?.trim()
+    const ipHash = ipRaw ? (await sha256Hex(ipRaw + IP_SALT)).slice(0, 32) : ''
+    const supabase = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_ANON_KEY')!, {
+      auth: { persistSession: false, autoRefreshToken: false },
+    })
+    const { error } = await supabase.from('collab_inquiries').insert({
+      name,
+      email,
+      company,
+      budget,
+      message,
+      deliverables,
+      source_path: sourcePath,
+      ip_hash: ipHash,
+      user_agent: (req.headers.get('user-agent') ?? '').slice(0, 300),
+      status: 'new',
+    })
+    if (error) console.error(`[collab] DB insert failed (email ${emailSent ? 'sent' : 'also failed'}):`, error.message)
+    else dbSaved = true
+  } catch (err) {
+    console.error('[collab] DB insert threw:', err instanceof Error ? err.message : err)
   }
 
-  // Insert succeeded — the notification is awaited (the runtime may kill work queued
-  // after the response) but its outcome never affects the caller's success.
-  await notifyByEmail({
-    name,
-    email,
-    company: String(body.company ?? '').slice(0, 160),
-    budget: String(body.budget ?? '').slice(0, 120),
-    deliverables,
-    message,
-    sourcePath: String(body.sourcePath ?? '/'),
-  })
-  return json({ ok: true })
+  // Success if EITHER channel captured the brief. Only fail if both did.
+  if (emailSent || dbSaved) return json({ ok: true })
+  return json({ error: 'Could not submit right now. Please email me directly.' }, 502)
 })
