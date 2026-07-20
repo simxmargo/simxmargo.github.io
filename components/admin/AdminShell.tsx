@@ -30,7 +30,6 @@ const GROUPS = [
       { key: 'profile', label: 'Profile', icon: UserCircle },
       { key: 'portfolio', label: 'Portfolio', icon: LayoutGrid },
       { key: 'social', label: 'Social Stats', icon: BarChart3 },
-      { key: 'inquiries', label: 'Inquiries', icon: Inbox },
       { key: 'theme', label: 'Theme', icon: Palette },
       { key: 'content', label: 'Content', icon: Type },
     ],
@@ -38,6 +37,9 @@ const GROUPS = [
   {
     label: 'Outreach Studio',
     items: [
+      // Inbound "Work with me" leads lead the outreach flow: an inquiry can be
+      // promoted to a Contact, then queued — so it sits above Contacts here.
+      { key: 'inquiries', label: 'Inquiries', icon: Inbox },
       { key: 'contacts', label: 'Contacts', icon: Users },
       { key: 'queue', label: 'Send Queue', icon: Send },
       { key: 'settings', label: 'Settings', icon: Cog },
