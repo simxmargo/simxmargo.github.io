@@ -133,7 +133,14 @@ body {
 .mk .hero-scrim { position: absolute; inset: 0; z-index: 1; background: linear-gradient(95deg, var(--bg) 28%, rgba(11, 10, 8, 0.5) 50%, rgba(11, 10, 8, 0.15) 64%, transparent 80%); }
 .mk .hero-vig { position: absolute; inset: 0; z-index: 1; background: linear-gradient(to top, var(--bg), transparent 26%); }
 .mk .hero-content { position: relative; z-index: 2; width: 100%; padding-top: 68px; }
-.mk .hero-meta { margin-bottom: clamp(18px, 3vw, 26px); }
+/* flex-wrap is load-bearing on phones. HeroSection renders the tokens as adjacent
+   spans with NO whitespace between them — the gap comes from .dot's margin, and a
+   margin is not a line-break opportunity. As plain inline content the whole line
+   is therefore one unbreakable "word", so at 375px the last token ran 74px past
+   the viewport and was silently clipped by section.hero (no ellipsis, no scroll —
+   it just vanished). As flex items each token can wrap instead. The line still
+   fits on one row at desktop widths, so nothing changes there. */
+.mk .hero-meta { display: flex; flex-wrap: wrap; align-items: baseline; row-gap: 4px; margin-bottom: clamp(18px, 3vw, 26px); }
 /* Breathing room around the bullet separators so the label reads
    "Manila, PH · Fashion · Beauty" (spaced), not "Manila,PH·Fashion" (cramped). */
 .mk .dot { color: var(--accent-text); margin: 0 0.5em; }
@@ -386,7 +393,10 @@ body {
 .mk .form { display: flex; flex-direction: column; gap: 14px; }
 .mk .form-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
 .mk .field { display: flex; flex-direction: column; gap: 7px; }
-.mk .inp { background: var(--bg2); border: 1px solid var(--line); color: var(--ink); padding: 14px 15px; border-radius: 2px; font-family: inherit; font-size: 15px; width: 100%; transition: border-color 0.2s ease; }
+/* font-size MUST stay >= 16px: iOS Safari zooms the whole page in when a field
+   with smaller text is focused, and it does not zoom back out afterwards, so the
+   rest of the brief is filled in on a zoomed, side-scrolling page. */
+.mk .inp { background: var(--bg2); border: 1px solid var(--line); color: var(--ink); padding: 14px 15px; border-radius: 2px; font-family: inherit; font-size: 16px; width: 100%; transition: border-color 0.2s ease; }
 .mk .inp:focus { border-color: var(--accent); outline: none; }
 .mk .ta { min-height: 104px; resize: vertical; }
 .mk .form-success { background: var(--bg2); border: 1px solid var(--line); padding: clamp(30px, 4vw, 46px); display: flex; flex-direction: column; align-items: flex-start; gap: 12px; }
