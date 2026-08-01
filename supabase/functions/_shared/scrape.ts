@@ -93,9 +93,20 @@ const JUNK_DOMAINS = new Set([
 ])
 const ASSET_EXT = /\.(png|jpe?g|gif|svg|webp|ico|css|js|mjs|woff2?|ttf|eot|mp4|webm|pdf)$/i
 
+// Anchored, and stricter than EMAIL_RE: local and domain parts may not START or END
+// with a separator, and nothing outside the allowed sets may appear anywhere. This is
+// the last gate before an address is stored — EMAIL_RE only has to FIND a candidate in
+// a wall of markup, whereas this decides whether we're willing to email it.
+const STRICT_EMAIL =
+  /^[a-z0-9](?:[a-z0-9._%+-]*[a-z0-9])?@(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$/
+
 // Filter out the usual scraping false-positives. Conservative: when unsure, drop it.
 export function isLikelyContactEmail(email: string): boolean {
   const e = email.toLowerCase()
+  // Anything carrying escape debris ("customercare@gorjana.com\") fails here rather
+  // than being stored and hard-bouncing later. A bounce costs sender reputation; a
+  // dropped lead costs nothing but the lead.
+  if (!STRICT_EMAIL.test(e)) return false
   if (e.includes('@2x') || e.includes('@3x')) return false // retina asset refs (image@2x.png)
   if (ASSET_EXT.test(e)) return false
   if (e.length > 100) return false
@@ -115,18 +126,38 @@ function cleanMailto(raw: string): string {
   } catch {
     /* leave it encoded; the filter below still applies */
   }
-  return s.toLowerCase().replace(/[.,;:]+$/, '')
+  // Trailing debris an href picks up in escaped markup: backslashes from JSON string
+  // escaping, stray quotes/brackets, ordinary punctuation.
+  return s.toLowerCase().replace(/[\\"'>)\]}.,;:]+$/, '')
 }
 
-// Pull emails from `mailto:` links first (highest-signal), then a raw regex pass
-// over the HTML. Returns a deduped, lowercased, filtered list.
+// Modern storefronts inline their state as JSON inside <script> tags, where `>` is
+// written `>` and `/` is `\/`. Scanning the RAW text therefore captured those
+// escapes as part of the address — `>hello@brand.com` yields
+// "u003ehello@brand.com", which is a *syntactically valid* email, so every downstream
+// filter passed it and the send hard-bounced. Decoding first makes the escape a real
+// `>`, which the extraction patterns already treat as a boundary.
+function decodeSource(html: string): string {
+  return html
+    .replace(/\\u([0-9a-fA-F]{4})/g, (_m, hex) => String.fromCharCode(parseInt(hex, 16)))
+    .replace(/\\\//g, '/')
+    .replace(/&#x([0-9a-fA-F]+);/g, (_m, hex) => String.fromCharCode(parseInt(hex, 16)))
+    .replace(/&#(\d+);/g, (_m, dec) => String.fromCharCode(Number(dec)))
+    .replace(/&amp;/gi, '&')
+}
+
+// Pull emails from `mailto:` links first (highest-signal), then a regex pass over the
+// page. Returns a deduped, lowercased, filtered list.
 export function extractEmails(html: string): string[] {
+  const source = decodeSource(html)
   const found = new Set<string>()
-  for (const m of html.matchAll(/mailto:([^"'?>\s]+)/gi)) {
+  // `\\` added to the exclusion set: a JSON-escaped href would otherwise pull the
+  // backslash into the address.
+  for (const m of source.matchAll(/mailto:([^"'?>\s\\]+)/gi)) {
     const e = cleanMailto(m[1])
     if (isLikelyContactEmail(e)) found.add(e)
   }
-  for (const m of html.matchAll(EMAIL_RE)) {
+  for (const m of source.matchAll(EMAIL_RE)) {
     const e = m[0].toLowerCase()
     if (isLikelyContactEmail(e)) found.add(e)
   }

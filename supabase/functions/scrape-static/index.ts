@@ -37,22 +37,38 @@ const PAGE_TIMEOUT_MS = 8_000 // don't let one hung site stall the whole run
 const POLITE_DELAY_MS = 1_500 // ~1 request / 1.5s per domain (etiquette, §3)
 const MAX_EMAILS_PER_DOMAIN = 25 // a sane cap so a directory page can't flood us
 
-// Fetch a page as text. Returns null on any failure / non-HTML so callers can
-// just skip it — a missing /press page is normal, not an error.
-async function fetchText(url: string): Promise<string | null> {
+// Fetch a page as text. Returns the HTML *and* the outcome code, so callers can
+// tell "this page had no emails" apart from "the site refused us". A missing
+// /press page is normal, not an error — but a 403/429 wall is neither, and
+// silently folding both into `null` is what made every miss look identical.
+async function fetchText(url: string): Promise<{ html: string | null; code: number | string }> {
   try {
     const res = await fetch(url, {
       headers: { 'user-agent': USER_AGENT, accept: 'text/html,*/*' },
       redirect: 'follow',
       signal: AbortSignal.timeout(PAGE_TIMEOUT_MS),
     })
-    if (!res.ok) return null
+    if (!res.ok) return { html: null, code: res.status }
     const ct = res.headers.get('content-type') ?? ''
-    if (!ct.includes('text/html') && !ct.includes('text/plain')) return null
-    return await res.text()
-  } catch {
-    return null
+    if (!ct.includes('text/html') && !ct.includes('text/plain')) return { html: null, code: 'non-html' }
+    return { html: await res.text(), code: res.status }
+  } catch (err) {
+    return { html: null, code: err instanceof Error && err.name === 'TimeoutError' ? 'timeout' : 'unreachable' }
   }
+}
+
+// Explain WHY a domain yielded nothing, so `needs_browser` stops being a catch-all.
+// A wall of 403/429 means the site refused THIS user agent at the CDN edge — no
+// headless browser fixes that, so pointing the Playwright worker at it is wasted
+// work. Only "pages read fine but carried no address" is a real browser candidate.
+function diagnoseEmpty(statuses: Array<number | string>): string {
+  const blocked = statuses.filter((s) => s === 403 || s === 429).length
+  const readable = statuses.filter((s) => s === 200).length
+  if (readable === 0 && blocked > 0) {
+    return `Blocked by the site (${blocked}× 403/429) — it refused our user agent, so a headless browser is unlikely to help.`
+  }
+  if (readable === 0) return `No contact page could be read (${statuses.join(', ')}).`
+  return '' // pages loaded fine, they just publish no address → genuine browser candidate
 }
 
 Deno.serve(async (req) => {
@@ -97,13 +113,15 @@ Deno.serve(async (req) => {
 
       // robots.txt is advisory here; if we can't read it, assume nothing is disallowed.
       const robots = await fetchText(`https://${domain}/robots.txt`)
-      const disallowed = robots ? parseDisallowed(robots) : []
+      const disallowed = robots.html ? parseDisallowed(robots.html) : []
 
       const emails = new Map<string, string>() // email -> first source_url it appeared on
+      const statuses: Array<number | string> = [] // per-page outcome, for diagnoseEmpty()
       for (const [i, path] of CONTACT_PATHS.entries()) {
         if (!isPathAllowed(path, disallowed)) continue
         if (i > 0) await sleep(POLITE_DELAY_MS) // space out requests to the same host
-        const html = await fetchText(pageUrl(domain, path))
+        const { html, code } = await fetchText(pageUrl(domain, path))
+        statuses.push(code)
         if (!html) continue
         for (const e of extractEmails(html)) {
           if (!emails.has(e)) emails.set(e, pageUrl(domain, path))
@@ -112,8 +130,10 @@ Deno.serve(async (req) => {
       }
 
       if (emails.size === 0) {
-        // Static pass found nothing — likely JS-rendered. Defer to the Playwright worker.
+        // Nothing found. Either the site blocked us outright or it genuinely
+        // publishes no address statically — diagnoseEmpty() records which.
         r.status = 'needs_browser'
+        r.error = diagnoseEmpty(statuses)
       } else {
         const rows = [...emails].slice(0, MAX_EMAILS_PER_DOMAIN).map(([email, src]) => ({
           brand: job.brand,
