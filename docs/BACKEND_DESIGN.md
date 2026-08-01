@@ -4,7 +4,12 @@
 > The Contacts "Scrape new brands" button now queues `scrape_jobs` and runs the three
 > Edge Functions; new leads flow into the live `contacts` table. Enrichment + AI
 > scoring degrade gracefully until `HUNTER_API_KEY` / `ANTHROPIC_API_KEY` are set.
-> **Still design-only: sending (§6), suppression (§7), the optional Playwright worker.**
+> **Gmail OAuth (§6b) is now BUILT** — `gmail-oauth` Edge Function + migration
+> `0012_sending_account.sql` + the live Settings → Sending account card. Setup steps
+> (Google Cloud app, secrets, the `--no-verify-jwt` deploy) are in
+> `docs/GMAIL_SENDING_SETUP.md`.
+> **Still design-only: `send-one` + `pg_cron` (§6c/§6d), suppression (§7), the optional
+> Playwright worker.**
 > Grounded in research done 2026-06-15 (sources at the end) — re-verify external facts.
 
 The guiding principle: the **frontend stays dumb** (it only reads/writes Supabase
@@ -152,17 +157,29 @@ while testing. The tool is built to switch to Workspace later with zero code
 change (just a different connected account). If replies matter, the Workspace
 path is worth the ~$7.
 
-### 6b. Gmail OAuth (once)
+### 6b. Gmail OAuth (once) — ✅ BUILT (2026-07-30)
 
-- Scope: **`https://www.googleapis.com/auth/gmail.send`** — Google classifies it
-  **Sensitive (not Restricted)**, so a *personal* OAuth app can use it
-  **unverified** (click through the warning) with you as the test user.
+Implemented as the **`gmail-oauth` Edge Function** + migration
+`0012_sending_account.sql` + `components/admin/SendingAccountCard.tsx`.
+Operator setup lives in **`docs/GMAIL_SENDING_SETUP.md`** — do that before connecting.
+
+- Scope: **`https://www.googleapis.com/auth/gmail.send`** (+ non-sensitive `openid`
+  `email`, so the callback can learn *which* address connected — `gmail.send` alone
+  can't call `users.getProfile`). Google classifies `gmail.send` **Sensitive (not
+  Restricted)**, so a *personal* OAuth app can use it **unverified**.
 - **Flip the OAuth app to "In Production"** (still unverified) so the refresh
-  token **doesn't expire every 7 days** — this is the #1 gotcha.
-- Do the consent flow once (a small `gmail-oauth` function or a local script),
-  capture the **refresh token**, and store it as a Supabase **Edge Function
-  Secret** (`supabase secrets set GMAIL_REFRESH_TOKEN=…`), read via
-  `Deno.env.get()`. Never in the browser bundle.
+  token **doesn't expire every 7 days** — this is the #1 gotcha. The Settings
+  card's **Test** button (refresh-token → access-token, sends nothing) is how you
+  catch it; an `invalid_grant` sets `gmail_account.needs_reauth` and the UI says so.
+- The refresh token is stored in **`gmail_account.refresh_token`**, not an Edge
+  Function secret — a UI-driven connect flow has to be able to write it. Safety comes
+  from RLS: that table has **RLS enabled with zero policies** (deny-all for `anon` AND
+  `authenticated`), plus revoked table grants, so only the service-role key inside
+  Edge Functions can read it. The browser sees status only, through the
+  `SECURITY DEFINER` RPC `sending_account_status()`, which omits the token column.
+- The function deploys with **`--no-verify-jwt`** (Google's browser redirect can't
+  carry an `Authorization` header). Authorization moved inside: `requireAdmin()` on
+  every POST action, and a single-use, 10-minute `oauth_states` nonce on the callback.
 
 ### 6c. `send-one`
 
@@ -188,11 +205,22 @@ sends out to respect Gmail's ~60/min ceiling.
 
 ## 7. Compliance (structural, not optional)
 
-- **CAN-SPAM:** every email carries a truthful subject, your identity, a **physical
-  postal address** (now a profile field, baked into the template), and a working
-  **opt-out**. Honor removals immediately.
+- **CAN-SPAM:** every email carries a truthful subject, your real identity, and a
+  reply path that reaches a human.
+- ⚠️ **The one-line opt-out was REMOVED from the template** (2026-07-31, owner's
+  decision) because it is the single clearest "this is bulk mail" tell and the pitch
+  had to read as personally written. Know the trade-off you accepted: CAN-SPAM
+  §7704(a)(3) requires a functioning opt-out mechanism in *commercial* email, and a
+  cold pitch to a brand is commercial. What remains in its place is a real reply-to
+  that a person reads, and honoring any "stop" reply immediately and manually.
+  **If volume ever grows past hand-sent, put the opt-out back** — the exposure scales
+  with send count, and per-message penalties are the reason this was structural.
+  A **physical postal address** field (`mailing_address`) also exists on the profile
+  but is currently **empty**, so no address ships either.
 - **Suppression:** an opt-out reply or a bounce adds the address to
   `suppression_list`; a DB trigger **blocks queueing** to suppressed addresses.
+  With the footer gone this is now the *only* automated honor-the-removal path, which
+  makes building it more important, not less.
 - **GDPR:** prefer **role inboxes** (`press@`) over named EU individuals — much
   lower risk, and that's who handles pitches anyway. Keep volume low + targeting
   tight. *Not legal advice.*
@@ -217,7 +245,7 @@ sends out to respect Gmail's ~60/min ceiling.
 | "Scrape new brands" button (Contacts) | ✅ DONE — `ScrapeBrandsModal` → `scrapeBrands()` → insert `scrape_jobs` → `scrape-static` + `enrich` + `qualify` |
 | Mock `contacts` in the store | a Supabase `select * from contacts` |
 | "Approve & send" (Queue) | insert `send_queue` row → `pg_cron` → `send-one` |
-| "Connect Gmail" (Settings) | the `gmail-oauth` consent flow |
+| "Connect Gmail" (Settings) | ✅ DONE — `SendingAccountCard` → `gmail-oauth` (start/callback/test/disconnect) → `gmail_account` |
 | Profile fields / daily cap | persist to `app_settings` |
 
 ---
@@ -230,7 +258,9 @@ sends out to respect Gmail's ~60/min ceiling.
    flow in from the UI "Scrape new brands" button (`ScrapeBrandsModal` →
    `scrapeBrands()` inserts a `scrape_jobs` row → `scrape-static` → `enrich` → `qualify`).
 3. ✅ **`qualify`** *(deployed)* → fit scores populate once `ANTHROPIC_API_KEY` is set.
-4. **Gmail OAuth + `send-one` + `pg_cron`** → real sending with the daily cap.
+4. ✅ **Gmail OAuth** *(built 2026-07-30)* → connect/test/disconnect from Settings.
+   Then **`send-one` + `pg_cron`** → real sending with the daily cap (still to build;
+   `_shared/gmail.ts` `refreshAccessToken()` is the seam it plugs into).
 5. **Reply/bounce handling** → suppression + flip `contacts.status` to `replied`.
 6. *(optional)* Playwright worker for `needs_browser` sites.
 
