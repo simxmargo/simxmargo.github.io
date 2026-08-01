@@ -1,9 +1,15 @@
-// `collab` Edge Function — public "Work with me" submissions → an email
-// notification to the influencer's inbox, plus a best-effort record in Supabase.
+// `collab` Edge Function — public "Work with me" submissions → a record in
+// Supabase, plus (when asked) an email notification to the influencer's inbox.
 //
 // The static site has no server, so the public media-kit form POSTs here (via
 // supabase.functions.invoke in lib/mediakit/collab.ts). Honeypot + server-side
 // validation mirroring the DB CHECKs run first.
+//
+// NOTIFICATION: the public form now composes the brief in the VISITOR's own mail
+// client (lib/mediakit/compose.ts) and posts `notify: false`, so this function's
+// self-addressed email would be a duplicate — Gmail files those under All Mail
+// rather than the Inbox, which is why they went unnoticed. The send still fires
+// unconditionally when the DB write FAILS (see 3b), so no lead is lost silently.
 //
 // FLOW (fast confirm + resilience): the email send is KICKED OFF FIRST and runs
 // CONCURRENTLY with the DB insert. As soon as the DB durably captures the row we
@@ -264,9 +270,15 @@ Deno.serve(async (req) => {
   const inq: Inquiry = { name, email, company, budget, deliverables, message, sourcePath }
   const receivedAt = new Date()
 
+  // The public form now hands the brief to the VISITOR's own mail client, so it
+  // posts `notify: false` — a server-sent copy would duplicate it, and a
+  // self-addressed one at that (Gmail files those outside the Inbox). Defaults to
+  // TRUE so any older cached client, or a direct caller, still gets notified.
+  const notify = body.notify !== false
+
   // 1) Kick off the email send NOW; it runs concurrently with the DB write and
   //    (notifyByEmail never throws) resolves to whether it was sent.
-  const emailPromise = notifyByEmail(inq, receivedAt)
+  const emailPromise = notify ? notifyByEmail(inq, receivedAt) : null
 
   // 2) Best-effort DB write — a triage record in the studio Inbox when online.
   //    A failure here never loses the inquiry (the email still carries it).
@@ -299,13 +311,15 @@ Deno.serve(async (req) => {
   //     let the ~7s SMTP send finish in the background (falls back to awaiting it
   //     if this runtime can't background, so the email is never dropped).
   if (dbSaved) {
-    if (!runInBackground(emailPromise)) await emailPromise
+    if (emailPromise && !runInBackground(emailPromise)) await emailPromise
     return json({ ok: true })
   }
 
-  // 3b) DB write failed — email is now the ONLY channel. Await it and report the
-  //     real outcome. Success if it went out; 502 only if BOTH channels failed.
-  const emailSent = await emailPromise
+  // 3b) DB write failed — email is now the ONLY server-side record of this brief,
+  //     so send it EVEN IF the client opted out. A duplicate notification costs
+  //     nothing; a silently dropped lead costs a deal. Await it and report the
+  //     real outcome: 502 only if BOTH channels failed.
+  const emailSent = await (emailPromise ?? notifyByEmail(inq, receivedAt))
   if (emailSent) return json({ ok: true })
   return json({ error: 'Could not submit right now. Please email me directly.' }, 502)
 })
