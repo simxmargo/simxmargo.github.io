@@ -78,3 +78,42 @@ export async function updateInquiry(id: string, patch: { status: InquiryStatus }
 
   if (error) throw new Error(error.message)
 }
+
+// Spam is NOT a plain status write — it also blocks the sender and sweeps every
+// message they've already sent. That has to be one transaction: blocking someone but
+// leaving their existing mail in the inbox is a half-done job the UI can't recover
+// from. `set_inquiry_spam` (migration 0015) does all of it server-side and returns how
+// many messages moved, so the toast can be specific.
+//
+// Passing false is the exact inverse: unblock the sender and restore what was swept.
+export async function setInquirySpam(id: string, spam: boolean): Promise<number> {
+  const sb = supabaseBrowser
+  if (!sb) throw new Error('Studio is not configured.')
+
+  const { data, error } = await sb.rpc('set_inquiry_spam', { p_id: id, p_spam: spam })
+  if (error) throw new Error(error.message)
+  return typeof data === 'number' ? data : 0
+}
+
+// Batch sibling of updateInquiry, for "Mark all read". One `in (...)` round trip
+// instead of N sequential PATCHes — the inbox can hold dozens of unread rows, and
+// firing dozens of requests would both crawl and make partial-failure rollback a
+// mess. Same status whitelist; a no-op on an empty id list.
+export async function updateInquiries(ids: string[], patch: { status: InquiryStatus }): Promise<void> {
+  const sb = supabaseBrowser
+  if (!sb) throw new Error('Studio is not configured.')
+
+  const clean = ids.filter((id) => typeof id === 'string' && id.length > 0)
+  if (clean.length === 0) return
+
+  if (!INQUIRY_STATUSES.includes(patch.status)) {
+    throw new Error(`status must be one of: ${INQUIRY_STATUSES.join(', ')}`)
+  }
+
+  const { error } = await sb
+    .from('collab_inquiries')
+    .update({ status: patch.status })
+    .in('id', clean)
+
+  if (error) throw new Error(error.message)
+}
