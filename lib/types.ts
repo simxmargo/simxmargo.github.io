@@ -2,10 +2,11 @@
 // UI can swap from mock data to the live DB without changing components.
 
 export type ContactStatus =
-  | 'new' // scraped, not yet actioned
-  | 'queued' // drafted + waiting in the send queue
-  | 'sent' // email sent
-  | 'replied' // brand replied (the goal!)
+  | 'new' // scraped by us, never touched — a cold lead
+  | 'inbound' // THEY reached out first (a Work-with-me inquiry) — arrives warm
+  | 'queued' // scheduled in send_queue, sending shortly
+  | 'sent' // pitched, awaiting a reply
+  | 'replied' // they answered our pitch (the goal!)
   | 'bounced' // delivery failed
   | 'skip' // you decided not to contact
 
@@ -31,6 +32,7 @@ export interface CreatorProfile {
   name: string
   handle: string
   niche: string
+  location: string // e.g. "Philippines" — used in the pitch intro
   followers: string
   avgViews: string
   engagement: string

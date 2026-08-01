@@ -6,6 +6,8 @@ import { readBrands } from './resources/brands'
 import { readSocials } from './resources/socials'
 import { readInquiries } from './resources/inquiries'
 import { readSettings } from './resources/settings'
+import { readSendingAccount } from './resources/sendingAccount'
+import { readSendQueue } from './resources/sendQueue'
 
 // Centralized admin read-cache. Each resource now reads DIRECTLY from Supabase
 // (authenticated admin session + RLS is_admin()), replacing the old /api/admin/*
@@ -21,6 +23,14 @@ export const adminKeys = {
   socials: ['admin', 'socials'] as const,
   inquiries: ['admin', 'inquiries'] as const,
   settings: ['admin', 'settings'] as const,
+  // Split from `settings` on purpose: the Settings page saves the daily cap and
+  // connects Gmail independently, and the connect flow polls this key every couple
+  // of seconds while the consent popup is open — it must not drag the cap through
+  // that refetch loop.
+  sendingAccount: ['admin', 'sendingAccount'] as const,
+  // The outreach workspace polls this while anything is counting down, so it stays a
+  // key of its own — refetching the queue must never drag contacts through with it.
+  sendQueue: ['admin', 'sendQueue'] as const,
 }
 
 const READERS = {
@@ -29,6 +39,8 @@ const READERS = {
   socials: readSocials,
   inquiries: readInquiries,
   settings: readSettings,
+  sendingAccount: readSendingAccount,
+  sendQueue: readSendQueue,
 } as const
 
 export type AdminResource = keyof typeof READERS

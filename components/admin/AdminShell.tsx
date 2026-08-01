@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { Users, Send, Settings as Cog, UserCircle, LayoutGrid, BarChart3, Inbox, Palette, Type } from 'lucide-react'
+import { Send, Settings as Cog, UserCircle, LayoutGrid, BarChart3, Inbox, Palette, Type } from 'lucide-react'
 import { useStore } from '@/lib/store'
 import { AdminQueryProvider } from '@/components/admin/AdminQueryProvider'
 import { useAdminResource } from '@/lib/admin/queries'
@@ -9,8 +9,9 @@ import { readCachedAccent, writeCachedAccent, accentStyle } from '@/lib/admin/th
 import { applyFavicon } from '@/lib/applyFavicon'
 import { themeFaviconDataUrl } from '@/lib/mediakit/favicon'
 import type { PublicProfile } from '@/lib/mediakit-types'
-import { ContactsPage } from '@/components/pages/ContactsPage'
-import { QueuePage } from '@/components/pages/QueuePage'
+import type { InquiryRow } from '@/lib/admin/resources/inquiries'
+import type { SendQueueRow } from '@/lib/admin/resources/sendQueue'
+import { OutreachPage } from '@/components/pages/OutreachPage'
 import { SettingsPage } from '@/components/pages/SettingsPage'
 import { ProfileEditor } from '@/components/admin/ProfileEditor'
 import { ContentEditor } from '@/components/admin/ContentEditor'
@@ -21,7 +22,7 @@ import { ThemeEditor } from '@/components/admin/ThemeEditor'
 import { SidebarBrand } from '@/components/admin/SidebarBrand'
 import { signOutAdmin } from '@/lib/admin/auth'
 
-type Panel = 'profile' | 'portfolio' | 'social' | 'inquiries' | 'theme' | 'content' | 'contacts' | 'queue' | 'settings'
+type Panel = 'profile' | 'portfolio' | 'social' | 'inquiries' | 'theme' | 'content' | 'outreach' | 'settings'
 
 const GROUPS = [
   {
@@ -40,8 +41,10 @@ const GROUPS = [
       // Inbound "Work with me" leads lead the outreach flow: an inquiry can be
       // promoted to a Contact, then queued — so it sits above Contacts here.
       { key: 'inquiries', label: 'Inquiries', icon: Inbox },
-      { key: 'contacts', label: 'Contacts', icon: Users },
-      { key: 'queue', label: 'Send Queue', icon: Send },
+      // Contacts and Send Queue were merged into one workspace — picking a brand and
+      // watching it send is a single loop, and splitting it across two pages made the
+      // result of every click happen off-screen.
+      { key: 'outreach', label: 'Outreach', icon: Send },
       { key: 'settings', label: 'Settings', icon: Cog },
     ],
   },
@@ -66,11 +69,26 @@ export function AdminShell() {
 // colour is set.
 function StudioShell() {
   const [panel, setPanel] = useState<Panel>('profile')
-  const queueCount = useStore((s) => s.queue.length)
   const hydrate = useStore((s) => s.hydrate)
   useEffect(() => {
     hydrate()
   }, [hydrate])
+
+  // Unread badge on Inquiries. "Unread" is status 'new' — the inbox flips a row to
+  // 'read' on open, so anything still 'new' is genuinely untouched. This shares the
+  // `inquiries` query key with InquiriesInbox, so react-query serves both from one
+  // fetch and the badge drops the moment the inbox marks something read.
+  const inquiriesQ = useAdminResource<InquiryRow[]>('inquiries')
+  const unreadInquiries = Array.isArray(inquiriesQ.data)
+    ? inquiriesQ.data.filter((i) => i.status === 'new').length
+    : 0
+
+  // Queue badge now counts DURABLE rows, not session state — it survives a reload and
+  // is true across tabs, which the old in-memory count never was.
+  const queueQ = useAdminResource<SendQueueRow[]>('sendQueue')
+  const queueCount = Array.isArray(queueQ.data)
+    ? queueQ.data.filter((r) => r.status === 'queued' || r.status === 'sending').length
+    : 0
 
   const profileQ = useAdminResource<Partial<PublicProfile>>('profile')
   // Paint the saved accent on FIRST render from the localStorage cache, so the studio
@@ -114,7 +132,22 @@ function StudioShell() {
                     <Icon size={17} aria-hidden="true" />
                     {label}
                   </span>
-                  {key === 'queue' && queueCount > 0 && <span className="nav-count">{queueCount}</span>}
+                  {key === 'outreach' && queueCount > 0 && (
+                    <span className="nav-count">
+                      <span aria-hidden="true">{queueCount}</span>
+                      <span className="sr-only">{queueCount} queued</span>
+                    </span>
+                  )}
+                  {/* Colour alone must never carry the meaning — the count is a
+                      number, and screen readers get the word "unread" too. */}
+                  {key === 'inquiries' && unreadInquiries > 0 && (
+                    <span className="nav-count">
+                      <span aria-hidden="true">{unreadInquiries}</span>
+                      <span className="sr-only">
+                        {unreadInquiries} unread {unreadInquiries === 1 ? 'inquiry' : 'inquiries'}
+                      </span>
+                    </span>
+                  )}
                 </button>
               )
             })}
@@ -144,8 +177,7 @@ function StudioShell() {
         {panel === 'inquiries' && <InquiriesInbox />}
         {panel === 'theme' && <ThemeEditor />}
         {panel === 'content' && <ContentEditor />}
-        {panel === 'contacts' && <ContactsPage />}
-        {panel === 'queue' && <QueuePage />}
+        {panel === 'outreach' && <OutreachPage />}
         {panel === 'settings' && <SettingsPage />}
       </main>
     </div>

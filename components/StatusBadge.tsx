@@ -7,24 +7,49 @@ import type { ContactStatus } from '@/lib/types'
 //   pill-danger — failure (bounced)
 const STYLES: Record<ContactStatus, string> = {
   new: 'pill',
+  inbound: 'pill pill-ok',
   queued: 'pill pill-accent',
   sent: 'pill pill-accent',
   replied: 'pill pill-ok',
   bounced: 'pill pill-danger',
-  skip: 'pill',
+  skip: 'pill pill-muted',
 }
 
 const LABELS: Record<ContactStatus, string> = {
   new: 'New',
+  // "They emailed us" rather than "Inbound" — the point of this status is that the
+  // brand made the first move, and a plain noun buries that.
+  inbound: 'They emailed us',
   queued: 'Queued',
   sent: 'Sent',
   replied: 'Replied',
   bounced: 'Bounced',
-  skip: 'Skipped',
+  // The DB value stays 'skip' (it's in the contacts CHECK constraint and predates
+  // this wording); only the label changed, because "Archived" is what the action
+  // now says and a badge that disagreed with its own button would read as a bug.
+  skip: 'Archived',
 }
 
-export function StatusBadge({ status }: { status: ContactStatus }) {
-  return <span className={STYLES[status]}>{LABELS[status]}</span>
+/** Whole days since an ISO date, or null if it isn't parseable. */
+function daysSince(iso: string): number | null {
+  const t = new Date(iso).getTime()
+  if (Number.isNaN(t)) return null
+  return Math.floor((Date.now() - t) / 86_400_000)
+}
+
+export function StatusBadge({ status, since }: { status: ContactStatus; since?: string }) {
+  // "New" with no qualifier is true on day one and still true six weeks later, which
+  // is how a whole column ends up meaning nothing. Ageing it turns a label into a
+  // nudge: a lead sitting at "New · 21d" is visibly waiting on you.
+  const age = status === 'new' && since ? daysSince(since) : null
+  return (
+    <span className={STYLES[status]}>
+      {LABELS[status]}
+      {age !== null && age >= 1 && (
+        <span style={{ opacity: 0.65, fontWeight: 500 }}>· {age}d</span>
+      )}
+    </span>
+  )
 }
 
 // Small colored chip for the 1-10 AI fit score.

@@ -1,20 +1,40 @@
 'use client'
 
-import { ExternalLink, Mail, Ban } from 'lucide-react'
+import { ExternalLink, Send, Archive, Loader2, Check } from 'lucide-react'
 import type { Contact } from '@/lib/types'
-import { StatusBadge, FitChip } from './StatusBadge'
+import { StatusBadge } from './StatusBadge'
 
 export function ContactsTable({
   contacts,
-  onDraft,
+  totalCount,
+  onQueue,
   onSkip,
+  queuedContactIds,
+  pendingId,
+  disabledReason,
 }: {
   contacts: Contact[]
-  onDraft: (c: Contact) => void
+  /** Unfiltered contact count — lets the empty state tell "no data yet" apart
+   *  from "your filters excluded everything". Blaming the filters when the table
+   *  is simply empty reads as a bug and sends you hunting for one. */
+  totalCount: number
+  onQueue: (c: Contact) => void
   onSkip: (c: Contact) => void
+  /** Contacts with a live send_queue row — their button becomes a non-action. */
+  queuedContactIds: Set<string>
+  /** The row mid-request, so only that button spins. */
+  pendingId: string | null
+  /** Non-empty when sending is blocked (no account / no test sent yet). */
+  disabledReason: string
 }) {
   if (contacts.length === 0) {
-    return <div className="empty">No contacts match your filters.</div>
+    return (
+      <div className="empty">
+        {totalCount === 0
+          ? 'No contacts yet — use “Scrape new brands” above to find brand inboxes.'
+          : 'No contacts match your filters.'}
+      </div>
+    )
   }
 
   return (
@@ -25,7 +45,6 @@ export function ContactsTable({
             <th>Brand</th>
             <th>Contact</th>
             <th>Country</th>
-            <th style={{ textAlign: 'center' }}>Fit</th>
             <th>Status</th>
             <th style={{ textAlign: 'right' }}>Actions</th>
           </tr>
@@ -50,24 +69,49 @@ export function ContactsTable({
                 <div style={{ fontSize: 12, color: 'var(--faint)', textTransform: 'capitalize' }}>{c.emailType}</div>
               </td>
               <td style={{ color: 'var(--muted)' }}>{c.country}</td>
-              <td style={{ textAlign: 'center' }} title={c.fitReason}>
-                <FitChip score={c.fitScore} />
-              </td>
               <td>
-                <StatusBadge status={c.status} />
+                <StatusBadge status={c.status} since={c.createdAt} />
               </td>
               <td>
                 <div className="flex justify-end gap-1.5">
-                  <button onClick={() => onDraft(c)} className="btn btn-primary btn-sm">
-                    <Mail size={13} aria-hidden="true" /> Draft
-                  </button>
+                  {/* Already queued is shown as a STATE, not a disabled button with the
+                      same label — a greyed-out "Queue for Outreach" reads as broken,
+                      whereas "Queued" reads as done. */}
+                  {queuedContactIds.has(c.id) ? (
+                    <span className="pill pill-ok" style={{ whiteSpace: 'nowrap' }}>
+                      <Check size={12} aria-hidden="true" /> Queued
+                    </span>
+                  ) : (
+                    <button
+                      onClick={() => onQueue(c)}
+                      disabled={pendingId !== null || Boolean(disabledReason)}
+                      title={disabledReason || `Queue an outreach email to ${c.brand}`}
+                      className={`btn btn-primary btn-sm${
+                        pendingId !== null || disabledReason ? ' is-disabled' : ''
+                      }`}
+                      style={{ whiteSpace: 'nowrap' }}
+                    >
+                      {pendingId === c.id ? (
+                        <>
+                          <Loader2 size={13} className="animate-spin" aria-hidden="true" /> Queuing…
+                        </>
+                      ) : (
+                        <>
+                          <Send size={13} aria-hidden="true" /> Queue for Outreach
+                        </>
+                      )}
+                    </button>
+                  )}
+                  {/* Archive, not delete: the row stays (and keeps its scrape history)
+                      but leaves every default view. Reachable again via the Archived
+                      filter, so this is never a decision you can't walk back. */}
                   <button
                     onClick={() => onSkip(c)}
-                    title="Skip this brand"
-                    aria-label="Skip this brand"
-                    className="btn btn-danger btn-sm"
+                    title={`Archive ${c.brand}`}
+                    aria-label={`Archive ${c.brand}`}
+                    className="btn btn-ghost btn-sm"
                   >
-                    <Ban size={13} aria-hidden="true" />
+                    <Archive size={13} aria-hidden="true" />
                   </button>
                 </div>
               </td>

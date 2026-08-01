@@ -5,9 +5,9 @@ import type { ContactStatus } from '@/lib/types'
 
 export interface Filters {
   search: string
+  /** 'all' means every status EXCEPT archived — see OutreachPage. */
   status: ContactStatus | 'all'
   country: string
-  minFit: number
 }
 
 export function FilterBar({
@@ -38,21 +38,8 @@ export function FilterBar({
         />
       </div>
 
-      <select
-        value={filters.status}
-        onChange={(e) => setFilters({ ...filters, status: e.target.value as Filters['status'] })}
-        aria-label="Filter by status"
-        className="select"
-        style={{ width: 'auto' }}
-      >
-        <option value="all">All statuses</option>
-        <option value="new">New</option>
-        <option value="queued">Queued</option>
-        <option value="sent">Sent</option>
-        <option value="replied">Replied</option>
-        <option value="skip">Skipped</option>
-      </select>
-
+      {/* Status lives on the stat tiles above — the counts and the control that acts
+          on them were two widgets saying the same thing. See StatsBar. */}
       <select
         value={filters.country}
         onChange={(e) => setFilters({ ...filters, country: e.target.value })}
@@ -68,17 +55,8 @@ export function FilterBar({
         ))}
       </select>
 
-      <select
-        value={filters.minFit}
-        onChange={(e) => setFilters({ ...filters, minFit: Number(e.target.value) })}
-        aria-label="Filter by minimum fit score"
-        className="select"
-        style={{ width: 'auto' }}
-      >
-        <option value={0}>Any fit</option>
-        <option value={6}>Fit ≥ 6</option>
-        <option value={8}>Fit ≥ 8</option>
-      </select>
+      {/* The fit filter is gone with the Fit column — the AI qualifier never scores
+          these leads, so it only ever offered a way to hide all of them. */}
     </div>
   )
 }
