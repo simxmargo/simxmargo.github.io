@@ -344,6 +344,45 @@ body {
 .mk .contact-meta { margin-top: 26px; display: flex; flex-direction: column; gap: 14px; }
 .mk .cm-row { display: flex; flex-direction: column; gap: 4px; }
 .mk .cm-v { color: var(--ink); font-size: 16px; text-decoration: none; font-weight: 500; }
+
+/* Copy-to-clipboard email. The icon is hidden until the row is hovered (or the
+   button itself is focused, so keyboard users get the same affordance) and swaps
+   to a check for ~2s after a successful copy. align-self:flex-start keeps the
+   inline-flex row from stretching across the whole column. */
+.mk .cm-email { display: inline-flex; align-items: center; gap: 4px; align-self: flex-start; }
+.mk .copy-btn {
+  display: inline-flex; align-items: center; justify-content: center; flex: none;
+  width: 32px; height: 32px; padding: 7px; border: 0; border-radius: 2px;
+  background: none; color: var(--muted); cursor: pointer;
+  opacity: 0; transform: translateX(-4px);
+  transition: opacity 0.2s ease, transform 0.2s ease, color 0.2s ease;
+}
+.mk .cm-email:hover .copy-btn,
+.mk .copy-btn:focus-visible { opacity: 1; transform: none; }
+.mk .copy-btn:hover { color: var(--ink); }
+.mk .copy-btn:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
+.mk .copy-btn.is-copied { opacity: 1; transform: none; color: var(--accent-text); }
+/* No hover on touch, so the affordance must be permanent — and big enough to hit. */
+@media (hover: none) {
+  .mk .copy-btn { opacity: 1; transform: none; width: 44px; height: 44px; padding: 13px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .mk .copy-btn { transform: none; transition: opacity 0.2s ease, color 0.2s ease; }
+}
+
+/* "Your brief is ready" panel — the alternative composers under the primary CTA. */
+.mk .compose-go { justify-content: center; align-self: stretch; }
+.mk .btn-ico { width: 17px; height: 17px; flex: none; }
+.mk .compose-alts { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+/* Every other link in this panel opens a composer; muting "Start over" stops it
+   competing with them for the same accent colour. */
+.mk .compose-restart { color: var(--muted); margin-top: 2px; }
+.mk .compose-restart:hover { color: var(--ink); }
+
+.mk .sr-only {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
+}
 .mk .form { display: flex; flex-direction: column; gap: 14px; }
 .mk .form-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
 .mk .field { display: flex; flex-direction: column; gap: 7px; }
@@ -424,6 +463,10 @@ body {
 .studio .nav-item.active { background: var(--accent-soft); color: var(--accent-text); font-weight: 600; }
 .studio .nav-item .nav-lead { display: flex; align-items: center; gap: 12px; }
 .studio .nav-count { font-size: 11px; font-weight: 700; background: var(--accent-soft); color: var(--accent-text); border-radius: 999px; padding: 1px 8px; }
+/* Visually-hidden text. globals.css already defines this under .mk; the studio needs
+   its own copy so nav badges can pair a bare number with a spoken label ("3 unread
+   inquiries") without relying on Tailwind's utility surviving the scoped cascade. */
+.studio .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 .studio .side-foot { margin-top: auto; padding-top: 16px; border-top: 1px solid var(--line); display: flex; align-items: center; gap: 10px; }
 .studio .uavatar { width: 30px; height: 30px; border-radius: 50%; background: #2a2520; color: #f3eee4; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 600; flex: none; }
 .studio .side-link { font-size: 12.5px; color: var(--muted); text-decoration: none; font-weight: 500; transition: color 0.18s; }
@@ -482,6 +525,9 @@ body {
 .studio .input:read-only, .studio .input.is-readonly { background: var(--line2); color: var(--muted); cursor: default; }
 .studio .textarea { min-height: 96px; resize: vertical; line-height: 1.5; }
 .studio .field-hint { font-size: 11.5px; color: var(--faint); }
+/* Inline code in hints (migration names, npm commands) — needs a chip background to
+   separate from prose; monospace alone reads as a font glitch at 11.5px. */
+.studio code { font-size: 0.94em; background: var(--line2); color: var(--ink); padding: 1px 5px; border-radius: 5px; }
 .studio .url-row { display: flex; gap: 10px; align-items: center; }
 .studio .url-view { font-size: 13px; font-weight: 600; color: var(--accent-text); text-decoration: none; white-space: nowrap; }
 .studio .url-view:hover { text-decoration: underline; }
@@ -649,6 +695,119 @@ body {
 /* Inline state banners */
 .studio .banner { display: flex; align-items: flex-start; gap: 10px; border-radius: 12px; padding: 13px 15px; font-size: 13.5px; }
 .studio .banner-warn { background: color-mix(in srgb, #c79a3a 16%, transparent); border: 1px solid color-mix(in srgb, #c79a3a 40%, transparent); color: #e7c879; }
+
+/* ── Outreach workspace (leads left, send queue right) ─────────────────────── */
+/* minmax(0,1fr) not 1fr: a grid track's default min-width is auto, so the wide
+   contacts table would refuse to shrink and push the page into horizontal scroll. */
+/* Proportional, not a fixed sidebar: a hard 400px track leaves the queue pinned to
+   the far edge on a wide monitor while the leads column sits half-empty. */
+.studio .outreach-grid { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(400px, 0.75fr); gap: 20px; align-items: start; max-width: 1560px; }
+/* `.stack` is globally capped at 980px, which is right for single-column editors and
+   exactly wrong here — the cap, not the grid, is what was stranding the two columns
+   apart. Inside the workspace the tracks own the width. */
+.studio .outreach-grid > .stack { max-width: none; }
+.studio .outreach-head { max-width: 1560px; }
+
+/* Funnel strip. auto-fit + minmax means it reflows to 3-up then 2-up on its own
+   instead of needing breakpoints tuned to a column width that itself changes. */
+.studio .stat-strip { display: grid; grid-template-columns: repeat(auto-fit, minmax(148px, 1fr)); gap: 10px; }
+/* Buttons now, not divs — they filter. text-align/width reset because a <button>
+   centres and shrink-wraps by default, which would break the grid. */
+.studio .stat-tile { display: block; width: 100%; text-align: left; font: inherit; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 13px 15px 12px; cursor: pointer; transition: border-color 0.2s, background 0.2s; }
+.studio .stat-tile:hover { border-color: color-mix(in srgb, var(--accent) 35%, var(--line)); }
+.studio .stat-tile:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* The selected tile is marked by BORDER + BACKGROUND, not colour alone — the value
+   inside is already colour-coded per status, so a hue change would be ambiguous. */
+.studio .stat-tile[data-on] { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 9%, var(--panel)); }
+.studio .stat-tile[data-empty]:not([data-on]) { opacity: 0.72; }
+.studio .stat-tile-head { display: flex; align-items: center; gap: 7px; color: var(--faint); }
+.studio .stat-tile-head .flabel { margin: 0; }
+.studio .stat-tile-row { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin-top: 9px; }
+.studio .stat-bar { display: block; }
+.studio .stat-value { font-size: 27px; font-weight: 600; line-height: 1; }
+.studio .stat-pct { font-size: 11px; font-weight: 600; color: var(--faint); font-variant-numeric: tabular-nums; }
+.studio .stat-bar { margin-top: 10px; height: 3px; border-radius: 999px; background: var(--line); overflow: hidden; }
+.studio .stat-bar > span { display: block; height: 100%; border-radius: 999px; transition: width 0.35s ease-out; }
+
+@media (prefers-reduced-motion: reduce) { .studio .stat-bar > span { transition: none; } }
+
+/* ── Email template editor ─────────────────────────────────────────────────── */
+.studio .tpl-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(280px, 0.8fr); gap: 22px; align-items: start; }
+@media (max-width: 1000px) { .studio .tpl-grid { grid-template-columns: minmax(0, 1fr); } }
+.studio .tpl-toolbar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
+.studio .tpl-divider { width: 1px; height: 18px; background: var(--line); margin: 0 4px; }
+.studio .tpl-chip { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; padding: 4px 8px; border-radius: 7px; border: 1px solid var(--line); background: var(--field); color: var(--muted); cursor: pointer; transition: border-color 0.15s, color 0.15s; }
+.studio .tpl-chip:hover { border-color: var(--accent); color: var(--ink); }
+/* The preview follows you down a tall list of blocks — editing the sign-off while the
+   result is scrolled off-screen is the whole failure mode this avoids. */
+.studio .tpl-preview-wrap { position: sticky; top: 8px; }
+/* Subject sits OUTSIDE the iframe: it's chrome around the message, not part of the
+   rendered email, and keeping it out means the frame shows only what a client shows. */
+.studio .tpl-preview-subject-out { font-size: 13.5px; font-weight: 650; color: var(--ink); padding: 10px 12px; border: 1px solid var(--line); border-bottom: 0; border-radius: 12px 12px 0 0; background: var(--field); }
+.studio .tpl-preview-frame { display: block; width: 100%; height: 560px; border: 1px solid var(--line); border-radius: 0 0 12px 12px; background: #fff; }
+.studio .sig-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; }
+
+/* ── Pagination + queue preview ────────────────────────────────────────────── */
+.studio .pager { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding: 4px 2px; }
+.studio .qp-meta { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--ink); }
+.studio .qp-key { display: inline-block; min-width: 58px; color: var(--faint); font-size: 11px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; }
+.studio .qp-frame { display: block; width: 100%; height: 380px; border: 1px solid var(--line); border-radius: 10px; background: #fff; }
+.studio .tpl-chip.active { border-color: var(--accent); color: var(--ink); background: var(--accent-soft); }
+
+/* ── Brand directory picker (Scrape new brands) ────────────────────────────── */
+.studio .seg { display: inline-flex; padding: 3px; gap: 3px; background: var(--line2); border: 1px solid var(--line); border-radius: 10px; align-self: flex-start; }
+.studio .seg-btn { padding: 6px 14px; border: 0; border-radius: 7px; background: transparent; color: var(--muted); font-size: 13px; font-weight: 600; cursor: pointer; transition: background 0.15s, color 0.15s; }
+.studio .seg-btn.active { background: var(--panel); color: var(--ink); }
+.studio .seg-btn:disabled { cursor: default; opacity: 0.6; }
+.studio .dir-filters { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.studio .dir-cats { display: flex; gap: 6px; flex-wrap: wrap; }
+/* Capped height + its own scroll: 60+ brands must not turn the dialog into a page
+   that scrolls the Scrape button out of reach. */
+.studio .dir-list { max-height: 300px; overflow-y: auto; border: 1px solid var(--line); border-radius: 10px; padding: 4px; display: flex; flex-direction: column; gap: 2px; }
+.studio .dir-item { display: grid; grid-template-columns: auto minmax(0, 1fr) minmax(0, 1.1fr) auto; align-items: center; gap: 10px; padding: 7px 9px; border-radius: 7px; cursor: pointer; transition: background 0.12s; }
+.studio .dir-item:hover { background: var(--line2); }
+.studio .dir-item.is-added { opacity: 0.5; cursor: default; }
+.studio .dir-name { font-size: 13.5px; font-weight: 600; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.studio .dir-domain { font-size: 12px; color: var(--faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.studio .dir-country { font-size: 11px; font-weight: 600; color: var(--faint); }
+.studio .dir-tag { white-space: nowrap; }
+/* The queue is the feedback surface for actions taken on the left — it has to stay
+   in view while you work down a long contacts list, or the consequence of the click
+   scrolls away. */
+.studio .outreach-side { position: sticky; top: 18px; }
+/* The table still needs its own scroll inside the narrower column; the PAGE must
+   never scroll sideways. */
+.studio .outreach-grid .panel { overflow-x: auto; }
+
+@media (max-width: 1180px) {
+  .studio .outreach-grid { grid-template-columns: minmax(0, 1fr); }
+  .studio .outreach-side { position: static; }
+}
+
+.studio .queue-row { border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; background: var(--line2); }
+/* Sent is the state that must be unmistakable — it's the one that can't be undone.
+   Tinted surface AND a coloured border AND a check-icon pill: three signals, so it
+   never depends on colour perception alone. */
+.studio .queue-row[data-status="sent"] { border-color: color-mix(in srgb, var(--ok) 45%, transparent); background: color-mix(in srgb, var(--ok) 10%, transparent); }
+.studio .queue-row[data-status="failed"] { border-color: color-mix(in srgb, var(--danger) 45%, transparent); }
+.studio .queue-row[data-status="canceled"] { opacity: 0.55; }
+.studio .queue-brand { font-size: 14px; font-weight: 650; color: var(--ink); }
+.studio .queue-meta, .studio .queue-subject { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.studio .queue-meta { font-size: 11.5px; color: var(--faint); }
+.studio .queue-subject { margin-top: 8px; font-size: 12.5px; color: var(--muted); }
+.studio .queue-error { margin-top: 6px; font-size: 11.5px; color: var(--danger); }
+.studio .queue-confirm { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12.5px; color: var(--ink); }
+/* FIXED height, not min-height: the card must not resize when a send lands, a filter
+   changes, or the last row leaves a page — the Daily cap above and everything below
+   would jump under the cursor. Overflow scrolls in the rare case a row grows tall
+   (a long failure message), so the height holds regardless of content. */
+.studio .queue-list { height: 460px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; }
+.studio .queue-empty { flex: 1; display: flex; align-items: center; justify-content: center; text-align: center; padding: 20px; border: 1px dashed var(--line); border-radius: 12px; color: var(--faint); font-size: 13px; line-height: 1.6; }
+
+@media (prefers-reduced-motion: reduce) {
+  .studio .animate-spin { animation: none; }
+  .studio .slider-fill { transition: none !important; }
+}
 .studio .banner-error { background: color-mix(in srgb, var(--danger) 16%, transparent); border: 1px solid color-mix(in srgb, var(--danger) 40%, transparent); color: #f0a58f; }
 .studio .save-ok { display: inline-flex; align-items: center; gap: 6px; font-size: 13.5px; font-weight: 600; color: var(--ok); }
 
@@ -656,6 +815,53 @@ body {
 .studio .seg { display: inline-flex; gap: 4px; background: var(--field); border: 1px solid var(--line); border-radius: 10px; padding: 4px; flex-wrap: wrap; }
 .studio .seg-btn { border: none; background: none; color: var(--muted); font-family: inherit; font-size: 13px; font-weight: 500; padding: 6px 12px; border-radius: 7px; cursor: pointer; transition: background 0.15s, color 0.15s; }
 .studio .seg-btn.active { background: var(--accent-soft); color: var(--accent-text); font-weight: 600; }
+.studio .seg-count { display: inline-block; margin-left: 7px; min-width: 20px; text-align: center; font-size: 11px; font-weight: 700; line-height: 1.5; border-radius: 999px; padding: 0 6px; background: var(--line2); color: var(--muted); }
+/* Unread stays accent-filled even on an INACTIVE tab — the count is the reason to
+   look at the tab, so it must not fade out when you navigate away from it. */
+.studio .seg-count.is-unread { background: var(--accent); color: #fff; }
+
+/* Connected-state variant of the round icon badge (Settings → Sending account) */
+.studio .ico-badge.ok { background: color-mix(in srgb, var(--ok) 18%, transparent); color: var(--ok); }
+
+/* ── Inquiries inbox ─────────────────────────────────────────────────────────
+   Rows are a flex pair: an expand button that fills the row + a sibling action
+   cluster. They are NOT nested (invalid HTML, and it would swallow the clicks). */
+.studio .inq-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 14px; flex-wrap: wrap; }
+/* Folder tabs stay on ONE line. Without nowrap, "Archived" breaks mid-word inside its
+   pill as the column narrows and the whole strip grows to two rows. If the strip ever
+   genuinely runs out of room it scrolls sideways rather than reflowing — a tab bar
+   that changes height moves everything under it. */
+.studio .inq-toolbar .seg { flex-wrap: nowrap; max-width: 100%; overflow-x: auto; }
+.studio .inq-toolbar .seg-btn { white-space: nowrap; }
+.studio .inq-row { display: flex; align-items: center; gap: 0; }
+.studio .inq-main { flex: 1; min-width: 0; display: flex; align-items: center; gap: 11px; text-align: left; background: none; border: none; padding: 15px 8px 15px 16px; font-family: inherit; color: var(--ink); cursor: pointer; }
+.studio .inq-dot { width: 8px; height: 8px; border-radius: 999px; background: var(--accent); flex: none; }
+.studio .inq-dot.is-read { background: transparent; }
+.studio .inq-name { font-size: 14px; font-weight: 500; color: var(--muted); }
+.studio .inq-unread .inq-name { font-weight: 700; color: var(--ink); }
+/* Unread rows get a left accent rail. EVERY row reserves the 3px so switching
+   read↔unread doesn't shift the text sideways — an inset box-shadow was tried first
+   and bleeds around the 14px corner radius, reading as a full outline glow. */
+.studio .inq-item { border-left-width: 3px; border-left-color: transparent; }
+.studio .inq-unread { border-left-color: var(--accent); }
+.studio .inq-actions { display: flex; align-items: center; gap: 2px; flex: none; padding-right: 12px; opacity: 0.62; transition: opacity 0.15s; }
+.studio .inq-item:hover .inq-actions, .studio .inq-item:focus-within .inq-actions { opacity: 1; }
+.studio .icon-btn:disabled { opacity: 0.4; cursor: progress; }
+
+/* Undo toast — the reason archive/spam need no confirm dialog */
+.studio .toast { position: fixed; left: 50%; bottom: 24px; z-index: 80; display: flex; align-items: center; gap: 12px; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 10px 10px 10px 16px; font-size: 13.5px; color: var(--ink); white-space: nowrap; box-shadow: 0 18px 46px -18px rgba(0, 0, 0, 0.85); transform: translateX(-50%); animation: toast-in 0.22s ease-out; }
+/* flex:none on both controls — without it the flex container shrinks them and the
+   Undo icon wraps onto its own line. */
+.studio .toast-btn { flex: none; display: inline-flex; align-items: center; gap: 6px; background: none; border: none; color: var(--accent-text); font-family: inherit; font-size: 13.5px; font-weight: 700; cursor: pointer; padding: 5px 9px; border-radius: 7px; }
+.studio .toast .icon-btn { flex: none; }
+.studio .toast-btn:hover { background: var(--accent-soft); }
+@keyframes toast-in { from { opacity: 0; transform: translate(-50%, 10px); } to { opacity: 1; transform: translate(-50%, 0); } }
+
+/* Touch: no hover to reveal actions, and 44px targets (WCAG 2.5.5) */
+@media (pointer: coarse) {
+  .studio .inq-actions { opacity: 1; }
+  .studio .icon-btn { width: 44px; height: 44px; }
+}
 
 @media (max-width: 880px) {
   .studio { grid-template-columns: 1fr; }
@@ -666,5 +872,7 @@ body {
 }
 @media (prefers-reduced-motion: reduce) {
   .studio .btn, .studio .nav-item, .studio .slot, .studio .slot-scrim, .studio .switch, .studio .switch-knob, .studio .bcard { transition: none; }
+  .studio .inq-actions { transition: none; opacity: 1; }
+  .studio .toast { animation: none; }
   .animate-spin { animation: none; }
 }
