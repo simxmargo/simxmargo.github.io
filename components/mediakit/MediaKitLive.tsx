@@ -12,6 +12,7 @@ import { useEffect, useState } from 'react'
 import type { MediaKitData } from '@/lib/mediakit-types'
 import { DEFAULT_SITE_COPY } from '@/lib/mediakit-types'
 import { getMediaKitClient } from '@/lib/mediakit/clientData'
+import { loadSnapManifest, localizeAssets } from '@/lib/mediakit/localizedAssets'
 import { applyFavicon } from '@/lib/applyFavicon'
 import { themeFaviconDataUrl } from '@/lib/mediakit/favicon'
 import { RevealRoot } from '@/components/mediakit/RevealRoot'
@@ -28,34 +29,51 @@ export function MediaKitLive({ initial }: { initial: MediaKitData }) {
   useEffect(() => {
     let cancelled = false
     const run = () => {
-      getMediaKitClient().then((fresh) => {
+      Promise.all([getMediaKitClient(), loadSnapManifest()]).then(([fresh, manifest]) => {
         if (cancelled || !fresh) return
-        setData(fresh)
+        // Live rows carry the ORIGINAL remote image URLs; map them back to the
+        // local /snap/ copies the build downloaded. Without this the live upgrade
+        // re-fetches every image from Supabase/third-party CDNs and throws away
+        // the whole point of scripts/localize-export.mjs.
+        const live = localizeAssets(fresh, manifest)
+        setData(live)
         // The baked <head> favicon is whatever existed at BUILD time — let the live
         // value win (uploaded icon, else the current theme mark). A failed read
         // never reaches here, so the baked icon stays as the offline fallback.
         applyFavicon(
-          fresh.profile.faviconUrl || themeFaviconDataUrl(fresh.profile.theme?.accent ?? ''),
+          live.profile.faviconUrl || themeFaviconDataUrl(live.profile.theme?.accent ?? ''),
         )
       })
     }
     // Defer the live upgrade OUT of the critical load path. The baked snapshot is
-    // already current (rebuilt every deploy) and uses fast localized /snap/ images;
-    // fetching live rows would re-load their raw Supabase Storage URLs, so doing it
-    // during initial render made the browser re-download the portrait + logos and
-    // held the `load` event open. requestIdleCallback runs it once the main thread
-    // is free (so a busy/backgrounded tab loads its snapshot first, then upgrades),
-    // with a setTimeout fallback where the API is unavailable.
+    // already current (rebuilt every deploy) and uses fast localized /snap/ images,
+    // so there is nothing to gain from upgrading early — and plenty to lose.
     const ric = window as typeof window & {
       requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number
       cancelIdleCallback?: (id: number) => void
     }
     let idleId = 0
     let timeoutId = 0
-    if (typeof ric.requestIdleCallback === 'function') idleId = ric.requestIdleCallback(run, { timeout: 3000 })
-    else timeoutId = window.setTimeout(run, 1500)
+    const schedule = () => {
+      if (cancelled) return
+      if (typeof ric.requestIdleCallback === 'function') idleId = ric.requestIdleCallback(run, { timeout: 3000 })
+      else timeoutId = window.setTimeout(run, 1500)
+    }
+
+    // Gate on `load` — every baked image has finished — BEFORE re-rendering with
+    // live data. requestIdleCallback on its own fired at its 3s timeout, which on
+    // a cellular link lands while images are still downloading; changing the `src`
+    // of an in-flight <img> makes the browser ABORT the partial download and start
+    // over. Measured on Slow 4G / iPhone 13: the hero portrait took 22.9s and the
+    // page load 24.2s, against 6.2s / 7.8s with the swap suppressed. The manifest
+    // rewrite in `run` usually makes the new src identical (so React writes
+    // nothing), and this gate covers the images that have no local twin.
+    if (document.readyState === 'complete') schedule()
+    else window.addEventListener('load', schedule, { once: true })
+
     return () => {
       cancelled = true
+      window.removeEventListener('load', schedule)
       if (idleId && typeof ric.cancelIdleCallback === 'function') ric.cancelIdleCallback(idleId)
       if (timeoutId) clearTimeout(timeoutId)
     }

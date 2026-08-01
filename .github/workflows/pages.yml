@@ -80,10 +80,13 @@ jobs:
           NEXT_PUBLIC_ADMIN_EMAIL: simxmargo.collab@gmail.com
         run: npm run build
 
-      # Copy every Supabase-Storage image the export references (portraits, video
-      # covers, OG card, favicon) into out/snap/ and rewrite the references — so the
-      # published page still renders fully when the Supabase project is paused.
-      - name: Localize Supabase Storage assets into the export
+      # Copy every REMOTE image the export references — Supabase Storage (portraits,
+      # video covers, OG card, favicon) AND the third-party brand-logo CDNs
+      # (cdn.beacons.ai, img.logo.dev, …) — into out/snap/, rewrite the references,
+      # and emit out/snap/manifest.json for the client-side live upgrade. The page
+      # then renders entirely from this origin: no paused-Supabase breakage, no
+      # dependency on a brand CDN, and 4 fewer DNS+TLS handshakes on mobile.
+      - name: Localize remote images into the export
         env:
           NEXT_PUBLIC_SITE_URL: https://simxmargo.github.io
           NEXT_PUBLIC_SUPABASE_URL: https://zzgypushqcpchfxrjexc.supabase.co
