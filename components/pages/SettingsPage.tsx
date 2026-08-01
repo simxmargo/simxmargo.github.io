@@ -1,12 +1,14 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { Mail, ShieldCheck, AlertTriangle, RotateCcw } from 'lucide-react'
+import { ShieldCheck, AlertTriangle, RotateCcw } from 'lucide-react'
 import { useQueryClient } from '@tanstack/react-query'
 import { saveSettings } from '@/lib/admin/resources/settings'
 import { useStore } from '@/lib/store'
 import { useAdminResource, adminKeys, type AdminFetchError } from '@/lib/admin/queries'
 import { FormSkeleton } from '@/components/admin/Skeleton'
+import { SendingAccountCard } from '@/components/admin/SendingAccountCard'
+import { EmailTemplateEditor } from '@/components/admin/EmailTemplateEditor'
 
 // Outreach-only Studio Settings. All creator identity lives on the Profile tab and
 // the site favicon lives on the Theme tab (Media Kit) — this page owns ONLY app
@@ -110,34 +112,13 @@ export function SettingsPage() {
       </header>
 
       <div className="stack">
-        {/* Sending account — Gmail OAuth, backend pending */}
-        <section className="card">
-          <div className="card-head">
-            <span className="ico-badge"><Mail size={18} aria-hidden="true" /></span>
-            <h2 className="card-title">Sending account</h2>
-          </div>
-          <p className="card-sub indent">
-            Connect a dedicated secondary Gmail. Replies route to your Reply-to email so brands reach you directly.
-          </p>
-          <div className="card-body">
-            <div className="connect">
-              <div className="flex items-center gap-3">
-                <span className="ico-badge"><Mail size={18} aria-hidden="true" /></span>
-                <div>
-                  <div className="connect-t">No sending account connected</div>
-                  <div className="connect-s">Use a fresh secondary inbox — never your main one.</div>
-                </div>
-              </div>
-              <div className="flex items-center gap-3">
-                <span className="tag">Backend pending</span>
-                {/* TODO(studio-backend): launch Gmail OAuth (gmail.send scope) via Edge Function. */}
-                <button type="button" className="btn btn-ghost is-disabled" disabled title="Backend pending — see docs/BACKEND_DESIGN.md">
-                  Connect Gmail
-                </button>
-              </div>
-            </div>
-          </div>
-        </section>
+        {/* Sending account — live Gmail OAuth (see components/admin/SendingAccountCard).
+            It owns its own query + mutations, so the page's Save button stays scoped
+            to the daily cap; connecting Gmail needs no "Save changes" click. */}
+        <SendingAccountCard />
+
+        {/* Sits directly under the sending account: connect, then decide what goes out. */}
+        <EmailTemplateEditor />
 
         {/* Sending safety */}
         <section className="card">

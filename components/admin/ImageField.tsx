@@ -1,7 +1,7 @@
 'use client'
 
 import { useId, useRef, useState } from 'react'
-import { UploadCloud, ImageIcon, Loader2, AlertTriangle, X } from 'lucide-react'
+import { UploadCloud, ImageIcon, Loader2, AlertTriangle, X, Trash2 } from 'lucide-react'
 import { supabaseBrowser } from '@/lib/supabase/browser'
 
 interface ImageFieldProps {
@@ -13,6 +13,13 @@ interface ImageFieldProps {
   hint?: string
   /** CSS aspect-ratio for the preview tile (default portrait 3/4). */
   aspect?: string
+  /**
+   * Drops the paste-a-URL input and shrinks Remove to an icon. For places where the
+   * image is only ever uploaded (the email signature) and the raw storage URL is
+   * noise — it's unreadable at that width and nobody types one by hand.
+   * Opt-in so the Profile and Theme editors keep the full control.
+   */
+  compact?: boolean
 }
 
 // Upload rules mirror app/api/admin/upload/route.ts (keep in sync): bucket "media",
@@ -43,7 +50,15 @@ function slugify(name: string): string {
 // Supabase Storage → public URL) that ALSO keeps the raw URL input, so a hosted
 // link can still be pasted. Dark editorial "studio" styling (scoped in globals.css).
 
-export function ImageField({ label, value, onChange, folder = 'uploads', hint, aspect = '3 / 4' }: ImageFieldProps) {
+export function ImageField({
+  label,
+  value,
+  onChange,
+  folder = 'uploads',
+  hint,
+  aspect = '3 / 4',
+  compact = false,
+}: ImageFieldProps) {
   const inputRef = useRef<HTMLInputElement>(null)
   const urlId = useId()
   const [uploading, setUploading] = useState(false)
@@ -131,20 +146,28 @@ export function ImageField({ label, value, onChange, folder = 'uploads', hint, a
               )}
             </button>
             {value && !uploading && (
-              <button type="button" onClick={() => onChange('')} className="btn btn-danger btn-sm">
-                <X size={14} aria-hidden="true" /> Remove
+              <button
+                type="button"
+                onClick={() => onChange('')}
+                className="btn btn-danger btn-sm"
+                aria-label={`Remove ${label}`}
+                title={compact ? `Remove ${label}` : undefined}
+              >
+                {compact ? <Trash2 size={14} aria-hidden="true" /> : <><X size={14} aria-hidden="true" /> Remove</>}
               </button>
             )}
           </div>
 
-          <input
-            id={urlId}
-            type="url"
-            value={value}
-            onChange={(e) => onChange(e.target.value)}
-            className="input"
-            placeholder="…or paste an image URL"
-          />
+          {!compact && (
+            <input
+              id={urlId}
+              type="url"
+              value={value}
+              onChange={(e) => onChange(e.target.value)}
+              className="input"
+              placeholder="…or paste an image URL"
+            />
+          )}
 
           {hint && !error && <p className="field-hint">{hint}</p>}
           {error && (

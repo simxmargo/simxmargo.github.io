@@ -23,9 +23,15 @@ type SaveState = 'idle' | 'saving' | 'saved' | 'error'
 // verbatim rather than falling back to the default.
 function toForm(content: SiteCopy | undefined): CopyForm {
   const c = content ?? {}
-  const pick = (k: keyof SiteCopy) => {
+  // Explicit `: string` return. SiteCopy also carries non-string blobs that merely
+  // share the `content` jsonb (emailTemplate, signature) and are edited elsewhere —
+  // this editor only ever touches the string copy fields, and the type should say so
+  // rather than leak `string | Record<string, string>` into every form field.
+  const pick = (k: keyof SiteCopy): string => {
     const v = c[k]
-    return typeof v === 'string' && v.trim() ? v : DEFAULT_SITE_COPY[k]
+    if (typeof v === 'string' && v.trim()) return v
+    const fallback = DEFAULT_SITE_COPY[k]
+    return typeof fallback === 'string' ? fallback : ''
   }
   return {
     footerHeadline: pick('footerHeadline'),

@@ -74,12 +74,13 @@ These are UI shells / read-only today; each has a clear single swap point.
    page + media kit already read from `social_stats`, so no UI change is needed.
    Seam marker: derived metrics in `app/api/admin/settings/route.ts` (`deriveMetrics`).
 
-2. **Gmail sending account** (`Sending account` card) — `gmail.send` OAuth for a
-   dedicated secondary inbox, replies routed to `reply_to_email`. UI is a disabled
-   "Connect Gmail (Backend pending)" button. Swap point: an OAuth Edge Function +
-   token storage; then `send_queue` → `pg_cron` → `send-one` (see `BACKEND_DESIGN.md` §6).
-   The Send Queue's "Approve & send" remains mocked until this lands
-   (`lib/store.ts` `markQueuedAsSent`).
+2. ~~**Gmail sending account**~~ — ✅ **DONE (2026-07-31).** `gmail-oauth` handles
+   connect/test/disconnect against `gmail_account` (migration 0012, applied), and
+   `send-email` performs the real `users.messages.send` with replies routed to
+   `reply_to_email`. `lib/store.ts` `markQueuedAsSent` was replaced by `sendQueued`,
+   which only marks a contact sent once Gmail has accepted the message. Setup steps
+   live in `GMAIL_SENDING_SETUP.md`. Still design-only: `send_queue` → `pg_cron` for
+   unattended drip sending (`BACKEND_DESIGN.md` §6).
 
 3. **Outreach scrape/enrich** — "Scrape new brands" (Contacts) stays disabled; the
    scraper/enrich Edge Functions are the backend (`BACKEND_DESIGN.md` §3–4).

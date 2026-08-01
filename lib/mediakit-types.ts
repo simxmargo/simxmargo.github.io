@@ -49,12 +49,29 @@ export interface PublicProfile {
   // Editable marketing copy for otherwise-hardcoded strings (the footer headline, …).
   // Stored as a jsonb map on public_profile.content; any missing key falls back to
   // DEFAULT_SITE_COPY at render time, so the kit never shows a blank string.
-  content?: SiteCopy
+  content?: ProfileContent
   isPublished: boolean
 }
 
 // Admin-editable copy for strings that used to be hardcoded in the public components.
 // Keys are added here (and given a default below) as more sections become editable.
+// Everything that actually lives in the `public_profile.content` jsonb.
+//
+// SiteCopy is kept SEPARATE and string-only on purpose: `Required<SiteCopy>` is used
+// as the Content editor's form type, so folding non-copy blobs into it would force
+// that form to carry fields it never renders. These extra keys share the column
+// (no migration needed to add one) but are edited on entirely different screens.
+//
+// Both are typed loosely as string maps rather than importing their real shapes —
+// each owner defaults every field on read (resolveTemplate / signatureFields), so a
+// partial or absent object can never blank out an email.
+export type ProfileContent = SiteCopy & {
+  /** The outreach pitch — Settings → Email template (lib/emailTemplate.ts). */
+  emailTemplate?: Record<string, string>
+  /** Signature name/title/image overrides (_shared/signature.ts). */
+  signature?: Record<string, string>
+}
+
 export interface SiteCopy {
   // Footer closing line. The emphasis word is rendered in the accent colour; blank = none.
   footerHeadline?: string // e.g. "Let's make something real through reels."
