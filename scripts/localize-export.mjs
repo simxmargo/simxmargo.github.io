@@ -32,7 +32,19 @@ import { createHash } from 'node:crypto'
 import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, extname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import sharp from 'sharp'
 import { loadEnv } from './sb.mjs'
+
+// Downscale + re-encode budget. Measured on the deployed page: the brand tiles are
+// painted into a 126px box on a DPR-3 phone and a 166px box on a DPR-2 desktop, so
+// 384px covers the worst case with room to spare — yet the source logos were
+// 800x800, and one was 3000x1870. That is ~589 KB of pixels no layout can ever
+// show. The hero is the one image that genuinely needs to be big (778px box at
+// DPR 2 = 1556px), so it keeps its resolution and only changes format.
+const THUMB_MAX = 384
+const LARGE_MAX = 1600
+const WEBP_QUALITY_LARGE = 82
+const WEBP_QUALITY_THUMB = 80
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const outDir = join(root, 'out')
@@ -105,7 +117,10 @@ const MIME_EXT = {
   'image/avif': '.avif',
   'video/mp4': '.mp4',
 }
-function localNameFor(url, contentType) {
+function localNameFor(url, contentType, forcedExt) {
+  // A re-encoded image must be named for what it now IS, not what it was fetched
+  // as — a WebP written as .jpg is served as image/jpeg and will not decode.
+  if (forcedExt) return createHash('sha1').update(url).digest('hex').slice(0, 16) + forcedExt
   const urlExt = extname(url.split('?')[0]).toLowerCase()
   // Only trust the URL's extension when it IS an image extension. Extension-less
   // image CDNs otherwise poison this: extname('/fashionnova.com') === '.com', and
@@ -123,6 +138,50 @@ for (const f of files) {
   }
 }
 
+// Which images may NOT be touched, and which must stay big. Both are read out of
+// the exported HTML rather than the database: it needs no key, no network, and it
+// describes exactly what this build actually renders. Attribute order is not
+// guaranteed, so each tag is matched from either direction.
+const HERO_RE = [
+  /<img[^>]+class=["'][^"']*hero-photo[^"']*["'][^>]*src=["']([^"']+)["']/gi,
+  /<img[^>]+src=["']([^"']+)["'][^>]*class=["'][^"']*hero-photo[^"']*["']/gi,
+]
+// og:image and favicons are consumed by OTHER people's software — Discord, Slack,
+// iMessage, the browser tab — where WebP support is patchy and a broken share card
+// is invisible to us. So these keep their original FORMAT. They are still resized:
+// changing pixels is safe, changing the container is not, and the favicon is
+// downloaded by every visitor on every page load (it was a 272 KB PNG).
+const OG_RE = [
+  /<meta[^>]+(?:property|name)=["'][^"']*image[^"']*["'][^>]*content=["']([^"']+)["']/gi,
+  /<meta[^>]+content=["']([^"']+)["'][^>]*(?:property|name)=["'][^"']*image[^"']*["']/gi,
+]
+const ICON_RE = [
+  /<link[^>]+rel=["'][^"']*icon[^"']*["'][^>]*href=["']([^"']+)["']/gi,
+  /<link[^>]+href=["']([^"']+)["'][^>]*rel=["'][^"']*icon[^"']*["']/gi,
+]
+
+const largeUrls = new Set()
+const ogUrls = new Set()
+const iconUrls = new Set()
+for (const f of files.filter((p) => extname(p).toLowerCase() === '.html')) {
+  const html = readFileSync(f, 'utf8')
+  for (const re of HERO_RE) for (const m of html.matchAll(re)) largeUrls.add(m[1])
+  for (const re of OG_RE) for (const m of html.matchAll(re)) ogUrls.add(m[1])
+  for (const re of ICON_RE) for (const m of html.matchAll(re)) iconUrls.add(m[1])
+}
+
+// icon beats og: the same file can legitimately be both, and the icon cap is the
+// safe one to apply.
+function roleFor(url) {
+  if (iconUrls.has(url)) return 'icon'
+  if (ogUrls.has(url)) return 'og'
+  return largeUrls.has(url) ? 'large' : 'thumb'
+}
+
+// Pixel cap per role. og:image is the size every social platform actually renders.
+const MAX_FOR = { thumb: THUMB_MAX, large: LARGE_MAX, og: 1200, icon: 256 }
+const KEEPS_FORMAT = new Set(['og', 'icon'])
+
 if (found.size === 0) {
   console.log('No remote image URLs in the export — nothing to localize.')
   process.exit(0)
@@ -131,6 +190,7 @@ if (found.size === 0) {
 mkdirSync(snapDir, { recursive: true })
 const rewrites = new Map() // remote URL -> absolute local URL
 let failed = 0
+let savedBytes = 0
 
 let skippedNotImage = 0
 
@@ -146,12 +206,47 @@ for (const url of found) {
       skippedNotImage++
       continue
     }
-    const buf = Buffer.from(await res.arrayBuffer())
-    const name = localNameFor(url, type)
+    const original = Buffer.from(await res.arrayBuffer())
+    let buf = original
+    let forcedExt = null
+    const role = roleFor(url)
+
+    // SVG is already resolution-independent and GIF may be animated (sharp would
+    // flatten it to a still frame), so both are copied through untouched.
+    const transformable = type !== 'image/svg+xml' && type !== 'image/gif'
+    if (transformable) {
+      try {
+        const max = MAX_FOR[role]
+        let pipe = sharp(original)
+          .rotate() // honour EXIF orientation before it is stripped
+          .resize(max, max, { fit: 'inside', withoutEnlargement: true })
+        // No format call = sharp writes back the format it read, which is what
+        // keeps share cards and favicons decodable everywhere.
+        if (!KEEPS_FORMAT.has(role)) {
+          pipe = pipe.webp({ quality: role === 'large' ? WEBP_QUALITY_LARGE : WEBP_QUALITY_THUMB })
+          forcedExt = '.webp'
+        }
+        buf = await pipe.toBuffer()
+        savedBytes += original.length - buf.length
+      } catch (err) {
+        // Fail SOFT: an image sharp cannot read is still worth localizing at its
+        // original size. Losing a logo entirely would be a worse trade than
+        // shipping it a few KB heavier.
+        buf = original
+        forcedExt = null
+        console.warn(`  ⚠ could not re-encode, storing original: ${err.message}`)
+      }
+    }
+
+    const name = localNameFor(url, type, forcedExt)
     writeFileSync(join(snapDir, name), buf)
     rewrites.set(url, `${SITE_URL}/snap/${name}`)
     const u = new URL(url)
-    console.log(`  ✓ ${u.host}/…/${decodeURIComponent(u.pathname.split('/').pop())} → snap/${name} (${buf.length} bytes)`)
+    const shrink = buf.length < original.length ? ` (${Math.round((1 - buf.length / original.length) * 100)}% smaller)` : ''
+    console.log(
+      `  ✓ [${role}] ${u.host}/…/${decodeURIComponent(u.pathname.split('/').pop())} → snap/${name} ` +
+        `${original.length} → ${buf.length} bytes${shrink}`,
+    )
   } catch (err) {
     failed++
     console.warn(`  ⚠ keeping remote URL (download failed: ${err.message}): ${url}`)
@@ -180,5 +275,9 @@ console.log(
   `✓ Localized ${rewrites.size}/${found.size} remote image(s) into out/snap/, rewrote ${filesRewritten} file(s)` +
     (skippedNotImage ? ` — ${skippedNotImage} skipped (not an image)` : '') +
     (failed ? ` — ${failed} left remote (see warnings above)` : ''),
+)
+console.log(
+  `✓ Resized (thumb ≤${THUMB_MAX}px · hero ≤${LARGE_MAX}px · og ≤${MAX_FOR.og}px · icon ≤${MAX_FOR.icon}px);` +
+    ` WebP for page images, original format kept for share cards + favicons — saved ${Math.round(savedBytes / 1024)} KB`,
 )
 console.log(`✓ Wrote out/snap/manifest.json with ${rewrites.size} entr${rewrites.size === 1 ? 'y' : 'ies'} for the client-side live upgrade`)
