@@ -35,6 +35,7 @@ export const MERGE_FIELDS: { token: string; label: string }[] = [
   { token: '{location}', label: 'Your location' },
   { token: '{audience}', label: 'Your audience' },
   { token: '{mediaKitUrl}', label: 'Media kit URL' },
+  { token: '{handle}', label: 'Your @handle' },
 ]
 
 export const DEFAULT_TEMPLATE: EmailTemplate = {
@@ -51,6 +52,11 @@ export const DEFAULT_TEMPLATE: EmailTemplate = {
     "Would you be open to a paid collab? Happy to start with gifting if that's easier on your end.",
     '',
     'My media kit has the numbers and some past work: {mediaKitUrl}',
+    '',
+    // Its OWN line, not appended to the media-kit sentence: dropEmptyMergeLines()
+    // works per line, so sharing one would make an unset media-kit URL take the
+    // platforms down with it.
+    "I'm on TikTok and Instagram as {handle} if you'd like to see the content itself.",
     '',
     'Thanks for reading,',
     '{name}',
@@ -96,6 +102,20 @@ function withArticle(location: string): string {
   return ARTICLE_COUNTRIES.has(t.toLowerCase()) ? `the ${t}` : t
 }
 
+// Mirrors signatureFields() in lib/emailSignature.ts: public_profile.handle is blank
+// today, so fall back to the display name — "@simxmargo" either way, without
+// hardcoding it — and guarantee exactly one leading @.
+//
+// The fallback is load-bearing, not cosmetic. dropEmptyMergeLines() deletes a whole
+// line whose token resolves to empty, so a bare `profile.handle` would silently
+// remove the line naming the platforms from every pitch, with nothing in the UI to
+// show it had gone. Falling back to the name keeps it non-empty whenever a name is set.
+function atHandle(profile: CreatorProfile): string {
+  const raw = (profile.handle || profile.name || '').trim()
+  if (!raw) return ''
+  return raw.startsWith('@') ? raw : `@${raw}`
+}
+
 /** Values each {token} resolves to. Exported so the editor preview uses the same map. */
 export function mergeValues(contact: Contact, profile: CreatorProfile): Record<string, string> {
   return {
@@ -105,6 +125,7 @@ export function mergeValues(contact: Contact, profile: CreatorProfile): Record<s
     '{location}': withArticle(profile.location),
     '{audience}': profile.audience,
     '{mediaKitUrl}': profile.mediaKitUrl,
+    '{handle}': atHandle(profile),
   }
 }
 
