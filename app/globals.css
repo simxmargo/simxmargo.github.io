@@ -562,6 +562,14 @@ body {
 .studio .input.input-fetched { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
 .studio .field-hint.hint-ok { display: inline-flex; align-items: center; gap: 5px; color: var(--ok); font-weight: 600; }
 .studio .field-hint.hint-warn { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); font-weight: 500; }
+/* Neutral icon+text hint. Tailwind's Preflight sets `svg { display: block }`, so an
+   icon inside a plain <p> takes a whole line to itself and any vertical-align on it
+   is ignored — which is why "Sends in 5 minutes" sat under its own clock. The two
+   variants above already solve this; this is the version for hints that are neither
+   success nor warning. flex-start (not center) keeps the icon on the first line if
+   the text ever wraps on a narrow panel. */
+.studio .field-hint.hint-icon { display: flex; align-items: flex-start; gap: 5px; }
+.studio .field-hint.hint-icon > svg { flex: none; margin-top: 1px; }
 
 /* ---- Brand Partners: carousel-row lanes + brand cards ---- */
 .studio .stack-wide { max-width: 1180px; }
@@ -711,12 +719,16 @@ body {
    contacts table would refuse to shrink and push the page into horizontal scroll. */
 /* Proportional, not a fixed sidebar: a hard 400px track leaves the queue pinned to
    the far edge on a wide monitor while the leads column sits half-empty. */
-.studio .outreach-grid { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(400px, 0.75fr); gap: 20px; align-items: start; max-width: 1560px; }
+.studio .outreach-grid { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(400px, 0.75fr); gap: 20px; align-items: stretch; max-width: 1560px; }
 /* `.stack` is globally capped at 980px, which is right for single-column editors and
    exactly wrong here — the cap, not the grid, is what was stranding the two columns
    apart. Inside the workspace the tracks own the width. */
 .studio .outreach-grid > .stack { max-width: none; }
 .studio .outreach-head { max-width: 1560px; }
+/* Full-width row under the two-column grid — the email template lives here, so the
+   pitch is edited on the same screen it gets sent from. Matches the grid's own
+   max-width so its left edge lines up with the leads table above it. */
+.studio .outreach-foot { max-width: 1560px; margin-top: 20px; }
 
 /* Funnel strip. auto-fit + minmax means it reflows to 3-up then 2-up on its own
    instead of needing breakpoints tuned to a column width that itself changes. */
@@ -784,7 +796,47 @@ body {
 /* The queue is the feedback surface for actions taken on the left — it has to stay
    in view while you work down a long contacts list, or the consequence of the click
    scrolls away. */
-.studio .outreach-side { position: sticky; top: 18px; }
+/* Both columns stretch to the grid row, and in each one the scrollable child absorbs
+   the slack — so whichever side is naturally taller, the two finish level.
+   flex-grow only distributes SPARE space, so the taller column is unaffected and the
+   shorter one catches up. This replaces the old sticky queue: a panel that is exactly
+   as tall as its neighbour has nothing to stick past. */
+.studio .outreach-side { align-self: stretch; }
+.studio .outreach-side > .card:last-child { flex: 1 1 auto; display: flex; flex-direction: column; min-height: 0; }
+.studio .outreach-side > .card:last-child > .card-body { flex: 1 1 auto; display: flex; flex-direction: column; min-height: 0; }
+/* Overrides the fixed 460px below. Still never resizes when a send lands — the list
+   scrolls internally; only a change in the LEADS column can move this height. */
+.studio .outreach-side .queue-list { flex: 1 1 auto; height: auto; min-height: 320px; }
+
+/* Leads column fills the grid row, and the table panel absorbs whatever is left over,
+   so the brand table ends flush with the send queue instead of stopping short of it.
+   When the table is the taller of the two this is a no-op — flex-grow only ever
+   distributes SPARE space. */
+.studio .outreach-main { min-height: 0; }
+.studio .outreach-main > .panel { flex: 1 1 auto; }
+.studio .outreach-main > .empty { flex: 1 1 auto; display: flex; align-items: center; justify-content: center; }
+
+/* Row-selection checkbox. accent-color is the one-line way to tint a native control
+   while keeping its built-in keyboard behaviour and indeterminate rendering. */
+.studio .tick { width: 15px; height: 15px; accent-color: var(--accent); cursor: pointer; margin: 0; display: block; }
+.studio .tick:disabled { cursor: default; opacity: 0.35; }
+.studio .table tr[data-selected] { background: color-mix(in srgb, var(--accent) 7%, transparent); }
+
+/* Bulk action bar — only rendered while something is ticked. */
+.studio .bulk-bar {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;
+  padding: 10px 14px; border: 1px solid var(--accent); border-radius: 12px;
+  background: color-mix(in srgb, var(--accent) 10%, var(--panel));
+}
+.studio .bulk-count { font-size: 13px; font-weight: 600; color: var(--ink); }
+
+/* Bulk confirm: the actual recipient list. Capped + scrollable so twenty brands can't
+   push the Queue/Cancel buttons off the bottom of the dialog. */
+.studio .bq-list { list-style: none; margin: 0; padding: 0; max-height: 240px; overflow-y: auto; border: 1px solid var(--line); border-radius: 10px; }
+.studio .bq-list li { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 8px 12px; border-bottom: 1px solid var(--line2); }
+.studio .bq-list li:last-child { border-bottom: 0; }
+.studio .bq-brand { font-size: 13.5px; font-weight: 600; color: var(--ink); flex: none; }
+.studio .bq-email { font-size: 12px; color: var(--faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* The table still needs its own scroll inside the narrower column; the PAGE must
    never scroll sideways. */
 .studio .outreach-grid .panel { overflow-x: auto; }

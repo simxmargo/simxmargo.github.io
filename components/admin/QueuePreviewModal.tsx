@@ -98,11 +98,13 @@ export function QueuePreviewModal({
             className="qp-frame"
           />
 
-          <p className="field-hint">
-            <Clock size={12} aria-hidden="true" style={{ verticalAlign: -1, marginRight: 4 }} />
-            {delayMinutes > 0
-              ? `Sends in ${delayMinutes} minutes. You can cancel it from the queue until then.`
-              : 'Goes out on the next send cycle — within about a minute. This one can’t be cancelled.'}
+          <p className="field-hint hint-icon">
+            <Clock size={12} aria-hidden="true" />
+            <span>
+              {delayMinutes > 0
+                ? `Sends in ${delayMinutes} minutes. You can cancel it from the queue until then.`
+                : 'Goes out on the next send cycle — within about a minute. This one can’t be cancelled.'}
+            </span>
           </p>
 
           <div className="flex items-center gap-3" style={{ flexWrap: 'wrap' }}>

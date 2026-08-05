@@ -12,6 +12,9 @@ export function ContactsTable({
   queuedContactIds,
   pendingId,
   disabledReason,
+  selectedIds,
+  onToggleSelect,
+  onTogglePage,
 }: {
   contacts: Contact[]
   /** Unfiltered contact count — lets the empty state tell "no data yet" apart
@@ -26,6 +29,11 @@ export function ContactsTable({
   pendingId: string | null
   /** Non-empty when sending is blocked (no account / no test sent yet). */
   disabledReason: string
+  /** Rows ticked for a bulk queue. */
+  selectedIds: Set<string>
+  onToggleSelect: (id: string) => void
+  /** Select/clear every SELECTABLE row on this page (already-queued rows excluded). */
+  onTogglePage: (ids: string[], select: boolean) => void
 }) {
   if (contacts.length === 0) {
     return (
@@ -37,11 +45,32 @@ export function ContactsTable({
     )
   }
 
+  // Already-queued rows can't be queued again, so they're not tickable either —
+  // otherwise "select all" would promise work it can't do.
+  const selectable = contacts.filter((c) => !queuedContactIds.has(c.id)).map((c) => c.id)
+  const selectedHere = selectable.filter((id) => selectedIds.has(id)).length
+  const allSelected = selectable.length > 0 && selectedHere === selectable.length
+
   return (
     <div className="panel">
       <table className="table">
         <thead>
           <tr>
+            <th style={{ width: 34 }}>
+              <input
+                type="checkbox"
+                className="tick"
+                checked={allSelected}
+                // Partial selection has to LOOK partial: an unchecked box beside six
+                // ticked rows reads as "nothing selected".
+                ref={(el) => {
+                  if (el) el.indeterminate = selectedHere > 0 && !allSelected
+                }}
+                onChange={() => onTogglePage(selectable, !allSelected)}
+                disabled={selectable.length === 0 || Boolean(disabledReason)}
+                aria-label={allSelected ? 'Clear selection on this page' : 'Select every brand on this page'}
+              />
+            </th>
             <th>Brand</th>
             <th>Contact</th>
             <th>Country</th>
@@ -51,7 +80,17 @@ export function ContactsTable({
         </thead>
         <tbody>
           {contacts.map((c) => (
-            <tr key={c.id}>
+            <tr key={c.id} data-selected={selectedIds.has(c.id) ? '' : undefined}>
+              <td>
+                <input
+                  type="checkbox"
+                  className="tick"
+                  checked={selectedIds.has(c.id)}
+                  onChange={() => onToggleSelect(c.id)}
+                  disabled={queuedContactIds.has(c.id) || Boolean(disabledReason)}
+                  aria-label={`Select ${c.brand}`}
+                />
+              </td>
               <td>
                 <div style={{ fontWeight: 600 }}>{c.brand}</div>
                 <a
@@ -97,7 +136,7 @@ export function ContactsTable({
                         </>
                       ) : (
                         <>
-                          <Send size={13} aria-hidden="true" /> Queue for Outreach
+                          <Send size={13} aria-hidden="true" /> Queue
                         </>
                       )}
                     </button>

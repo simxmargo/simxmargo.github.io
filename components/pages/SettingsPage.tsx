@@ -1,171 +1,32 @@
 'use client'
 
-import { useEffect, useState } from 'react'
-import { ShieldCheck, AlertTriangle, RotateCcw } from 'lucide-react'
-import { useQueryClient } from '@tanstack/react-query'
-import { saveSettings } from '@/lib/admin/resources/settings'
-import { useStore } from '@/lib/store'
-import { useAdminResource, adminKeys, type AdminFetchError } from '@/lib/admin/queries'
-import { FormSkeleton } from '@/components/admin/Skeleton'
 import { SendingAccountCard } from '@/components/admin/SendingAccountCard'
-import { EmailTemplateEditor } from '@/components/admin/EmailTemplateEditor'
 
-// Outreach-only Studio Settings. All creator identity lives on the Profile tab and
-// the site favicon lives on the Theme tab (Media Kit) — this page owns ONLY app
-// config that persists to app_settings: the daily send cap. Reads flow through the
-// shared TanStack Query cache so navigating between admin tabs never re-flashes
-// the skeleton.
-
-interface SettingsData {
-  dailyCap: number
-}
-
-type Save = 'idle' | 'saving' | 'saved' | 'error' | 'unconfigured'
+// Studio Settings — now ONLY the sending account.
+//
+// The email template and the daily send cap both MOVED to the Outreach tab. They are
+// things you reach for while working through leads, and keeping them here meant
+// leaving the page you were working on to change the message you were about to send,
+// or to raise a limit you had just hit. The sending account stays because connecting
+// Gmail is a one-time setup, not part of the daily loop.
+//
+// Creator identity lives on Profile; the site favicon on Theme (Media Kit).
 
 export function SettingsPage() {
-  const rehydrate = useStore((s) => s.hydrate)
-  const qc = useQueryClient()
-  const q = useAdminResource<SettingsData>('settings')
-
-  const [dailyCap, setDailyCap] = useState(20)
-  const [save, setSave] = useState<Save>('idle')
-  const [saveErr, setSaveErr] = useState('')
-
-  // Seed local form state from the cached query data. Stable while cached, so this
-  // only re-runs when the underlying settings actually change.
-  useEffect(() => {
-    if (!q.data) return
-    setDailyCap(typeof q.data.dailyCap === 'number' ? q.data.dailyCap : 20)
-  }, [q.data])
-
-  function setCap(n: number) {
-    setDailyCap(n)
-    if (save !== 'idle') setSave('idle')
-  }
-
-  async function onSave() {
-    setSave('saving')
-    setSaveErr('')
-    try {
-      await saveSettings({ dailyCap })
-      setSave('saved')
-      qc.invalidateQueries({ queryKey: adminKeys.settings })
-      void rehydrate() // refresh the queue meter so it picks up the new daily cap
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : ''
-      if (msg === 'Studio is not configured.') return setSave('unconfigured')
-      setSaveErr(msg || 'Couldn’t reach the server. Try again.')
-      setSave('error')
-    }
-  }
-
-  const saveLabel = save === 'saving' ? 'Saving…' : save === 'saved' ? 'Saved ✓' : 'Save changes'
-  const cap = dailyCap
-  const capPct = `${(((cap - 5) / 95) * 100).toFixed(2)}%`
-
-  if (q.isLoading) {
-    return <FormSkeleton withHeader titleW={150} subW={420} cards={2} fields={2} />
-  }
-
-  if (q.isError) {
-    const err = q.error as AdminFetchError | null
-    return (
-      <>
-        <header className="main-head">
-          <div>
-            <h1 className="page-title display">Settings</h1>
-            <p className="page-sub">App configuration for your studio.</p>
-          </div>
-        </header>
-        <div className="stack">
-          <div className="banner banner-error" role="alert">
-            <AlertTriangle size={18} aria-hidden="true" />
-            <div>
-              <p style={{ fontWeight: 600, margin: 0 }}>
-                {err?.message ?? `Couldn’t load settings${err?.status ? ` (${err.status})` : ''}.`}
-              </p>
-              <button
-                type="button"
-                onClick={() => void q.refetch()}
-                className="btn btn-ghost btn-sm"
-                style={{ marginTop: 12 }}
-              >
-                <RotateCcw size={14} aria-hidden="true" /> Retry
-              </button>
-            </div>
-          </div>
-        </div>
-      </>
-    )
-  }
-
   return (
     <>
       <header className="main-head">
         <div>
           <h1 className="page-title display">Settings</h1>
-          <p className="page-sub">App configuration — your outreach sending limits.</p>
+          <p className="page-sub">
+            Your sending account. The pitch template and daily send cap now live on the Outreach tab.
+          </p>
         </div>
-        <button type="button" className="btn btn-primary" onClick={onSave} disabled={save === 'saving'}>
-          {saveLabel}
-        </button>
       </header>
 
       <div className="stack">
-        {/* Sending account — live Gmail OAuth (see components/admin/SendingAccountCard).
-            It owns its own query + mutations, so the page's Save button stays scoped
-            to the daily cap; connecting Gmail needs no "Save changes" click. */}
+        {/* Owns its own query and mutations — connecting Gmail needs no page-level save. */}
         <SendingAccountCard />
-
-        {/* Sits directly under the sending account: connect, then decide what goes out. */}
-        <EmailTemplateEditor />
-
-        {/* Sending safety */}
-        <section className="card">
-          <div className="card-head">
-            <span className="ico-badge"><ShieldCheck size={18} aria-hidden="true" /></span>
-            <h2 className="card-title">Sending safety</h2>
-          </div>
-          <div className="card-body">
-            <div style={{ fontSize: 14.5 }}>
-              Daily send cap: <strong>{cap}</strong>
-            </div>
-            <div className="slider">
-              <div className="slider-track"><div className="slider-fill" style={{ width: capPct }} /></div>
-              <div className="slider-thumb" style={{ left: capPct }} />
-              <input
-                className="slider-input"
-                type="range"
-                min={5}
-                max={100}
-                value={cap}
-                onChange={(e) => setCap(Number(e.target.value))}
-                aria-label="Daily send cap"
-              />
-            </div>
-            <div className="flex justify-between" style={{ marginTop: 8 }}>
-              <span className="muted-sm">5</span>
-              <span className="muted-sm">100</span>
-            </div>
-            <p className="card-sub" style={{ marginTop: 14 }}>
-              Start low (10–20) and ramp slowly to keep your sending account healthy.
-            </p>
-          </div>
-        </section>
-
-        {/* Save state feedback */}
-        {save === 'unconfigured' && (
-          <div className="banner banner-warn" role="alert">
-            <AlertTriangle size={18} aria-hidden="true" />
-            <span>Saving needs SUPABASE_SERVICE_ROLE_KEY set on the server.</span>
-          </div>
-        )}
-        {save === 'error' && (
-          <div className="banner banner-error" role="alert">
-            <AlertTriangle size={18} aria-hidden="true" />
-            <span>{saveErr}</span>
-          </div>
-        )}
       </div>
     </>
   )

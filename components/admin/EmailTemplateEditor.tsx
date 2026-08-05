@@ -2,11 +2,11 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import { Bold, Italic, FileText, RotateCcw, CheckCircle2, AlertTriangle, Loader2 } from 'lucide-react'
+import { Bold, Italic, FileText, CheckCircle2, AlertTriangle, Loader2 } from 'lucide-react'
 import { useStore } from '@/lib/store'
 import { saveProfile } from '@/lib/admin/resources/profile'
 import { adminKeys, useAdminResource } from '@/lib/admin/queries'
-import { buildDraft, DEFAULT_TEMPLATE, MERGE_FIELDS, type EmailTemplate } from '@/lib/emailTemplate'
+import { buildDraft, MERGE_FIELDS, type EmailTemplate } from '@/lib/emailTemplate'
 import { textToHtml } from '@/lib/emailBody'
 import { buildSignature, signatureFields, type SignatureSource } from '@/lib/emailSignature'
 import { ImageField } from '@/components/admin/ImageField'
@@ -377,9 +377,11 @@ export function EmailTemplateEditor() {
               'Save'
             )}
           </button>
+          {/* Same size class as Save — a btn-sm next to a full-size primary read as
+              two unrelated controls rather than one pair of choices. */}
           <button
             type="button"
-            className="btn btn-ghost btn-sm"
+            className="btn btn-ghost"
             onClick={() => {
               setTemplate(saved)
               setSig(null)
@@ -387,15 +389,6 @@ export function EmailTemplateEditor() {
             disabled={saving || !dirty}
           >
             Discard changes
-          </button>
-          <button
-            type="button"
-            className="btn btn-ghost btn-sm"
-            onClick={() => setTemplate(DEFAULT_TEMPLATE)}
-            disabled={saving}
-            title="Restore the original wording (nothing is saved until you press Save)"
-          >
-            <RotateCcw size={13} aria-hidden="true" /> Reset wording
           </button>
         </div>
 
