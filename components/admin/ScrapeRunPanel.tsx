@@ -99,6 +99,15 @@ export function ScrapeRunPanel() {
 
       {open && (
         <div id="scrape-run-list" className="scrape-run-body">
+          {running && phase !== 'discovering' && (
+            <p className="field-hint hint-icon">
+              <Globe size={12} aria-hidden="true" />
+              <span>
+                Scraping happens on the server — you can close this tab and the contacts will
+                still appear.
+              </span>
+            </p>
+          )}
           {items.map((it) => {
             const p = pillFor(it)
             const Icon = p.icon

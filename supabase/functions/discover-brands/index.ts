@@ -28,8 +28,11 @@ const WIKIDATA = 'https://query.wikidata.org/sparql'
 // Wikidata asks bots to identify themselves with a contact route. Do NOT replace this
 // with a browser UA — that is exactly what their policy forbids.
 const UA = 'brand-outreach-studio/1.0 (+https://simxmargo.github.io) brand-discovery'
-const MAX_LIMIT = 50
-const MAX_SEARCHES = 6 // bounds the cost of one run against the free monthly credit
+const MAX_LIMIT = 200
+// Each search yields ~12 usable brands after filtering, so this reaches a 100-brand
+// batch. Still trivial against the free allowance: ~1,000 searches a month means ~80
+// full runs, and in practice a run stops early because it hits the limit first.
+const MAX_SEARCHES = 12
 
 // Deliberately the CHEAP shape. Adding `?item wdt:P31/wdt:P279* wd:Q4830453` to keep
 // only businesses is more correct in theory and took 42 SECONDS in practice — close to

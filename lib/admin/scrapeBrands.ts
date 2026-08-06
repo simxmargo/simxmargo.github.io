@@ -92,6 +92,65 @@ export function parseBrandLines(text: string, country = ''): { inputs: ScrapeInp
   return { inputs, invalid }
 }
 
+export interface QueuedJob {
+  id: string
+  brand: string
+  website: string
+}
+
+/**
+ * Insert the jobs and return — pg_cron drains them server-side.
+ *
+ * This is the path for a BIG batch. Driving 100 sites from the browser would be a
+ * ~30 minute loop that dies the moment the tab closes, which is the opposite of
+ * fire-and-forget. Queuing is two seconds; the crawl then happens whether or not
+ * anyone is watching.
+ */
+export async function queueScrapeJobs(inputs: ScrapeInput[]): Promise<QueuedJob[]> {
+  const sb = supabaseBrowser
+  if (!sb) throw new Error('Studio is not configured.')
+  if (inputs.length === 0) return []
+
+  const { data, error } = await sb
+    .from('scrape_jobs')
+    .insert(inputs.map((i) => ({ brand: i.brand, website: i.website, country: i.country || '' })))
+    .select('id, brand, website')
+  if (error) throw new Error(error.message)
+  return (data ?? []) as QueuedJob[]
+}
+
+export interface JobState {
+  id: string
+  status: string
+  error: string | null
+}
+
+/** Current status of queued jobs, for the progress panel to poll. */
+export async function readJobStates(ids: string[]): Promise<JobState[]> {
+  const sb = supabaseBrowser
+  if (!sb || ids.length === 0) return []
+  const { data, error } = await sb.from('scrape_jobs').select('id, status, error').in('id', ids)
+  if (error) throw new Error(error.message)
+  return (data ?? []) as JobState[]
+}
+
+/**
+ * How many contacts each of these domains has produced.
+ *
+ * scrape_jobs records the OUTCOME but not a count, and discovery already excluded
+ * every domain we held, so any contact on one of these websites came from this run.
+ */
+export async function countFoundByWebsite(websites: string[]): Promise<Map<string, number>> {
+  const sb = supabaseBrowser
+  const out = new Map<string, number>()
+  if (!sb || websites.length === 0) return out
+  const { data } = await sb.from('contacts').select('website').in('website', websites)
+  for (const r of (data ?? []) as { website: string }[]) {
+    out.set(r.website, (out.get(r.website) ?? 0) + 1)
+  }
+  return out
+}
+
 // Progress for a caller that shows the run live. Emitted per job so a 12-site run
 // reports as it goes instead of appearing frozen for two minutes.
 export type ScrapeEvent =
