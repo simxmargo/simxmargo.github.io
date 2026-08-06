@@ -745,13 +745,7 @@ body {
 .studio .stat-tile-head { display: flex; align-items: center; gap: 7px; color: var(--faint); }
 .studio .stat-tile-head .flabel { margin: 0; }
 .studio .stat-tile-row { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin-top: 9px; }
-.studio .stat-bar { display: block; }
 .studio .stat-value { font-size: 27px; font-weight: 600; line-height: 1; }
-.studio .stat-pct { font-size: 11px; font-weight: 600; color: var(--faint); font-variant-numeric: tabular-nums; }
-.studio .stat-bar { margin-top: 10px; height: 3px; border-radius: 999px; background: var(--line); overflow: hidden; }
-.studio .stat-bar > span { display: block; height: 100%; border-radius: 999px; transition: width 0.35s ease-out; }
-
-@media (prefers-reduced-motion: reduce) { .studio .stat-bar > span { transition: none; } }
 
 /* ── Email template editor ─────────────────────────────────────────────────── */
 .studio .tpl-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(280px, 0.8fr); gap: 22px; align-items: start; }
