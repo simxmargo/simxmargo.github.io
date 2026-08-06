@@ -9,6 +9,9 @@
 import type { SupabaseClient } from 'jsr:@supabase/supabase-js@2'
 import { buildSignature, type SignatureSource } from './signature.ts'
 import { googleCreds, GoogleAuthError, refreshAccessToken, sendMessage } from './gmail.ts'
+// Same normaliser the scraper de-duplicates with, so "one company" means the same
+// thing on the way in and on the way out.
+import { normalizeDomain } from './scrape.ts'
 // Same file the Settings preview uses, so what you see while editing is what sends.
 import { stripMarks, textToHtml } from '../../../lib/emailBody.ts'
 
@@ -17,7 +20,12 @@ const DEFAULT_DAILY_CAP = 20
 // Refusals that are NOT "the send failed" — the message never left, and the right
 // response differs per code. `capped` in particular must be retried later, not marked
 // failed: the pitch is fine, the clock isn't.
-export type BlockedCode = 'not_configured' | 'no_account' | 'invalid_recipient' | 'capped'
+export type BlockedCode =
+  | 'not_configured'
+  | 'no_account'
+  | 'invalid_recipient'
+  | 'capped'
+  | 'duplicate_company'
 
 export class SendBlockedError extends Error {
   code: BlockedCode
@@ -86,6 +94,40 @@ async function sentInLast24h(svc: SupabaseClient): Promise<number> {
   return count ?? 0
 }
 
+interface CompanyRow {
+  id: string
+  website: string | null
+  status: string
+  last_emailed_at: string | null
+}
+
+// Every OTHER contact row belonging to the same company, keyed on the WEBSITE rather
+// than the brand name or the email domain.
+//
+// Website is the only field that reliably identifies the company: brand names arrive
+// from scraped page titles and drift ("Gymshark" vs "Gymshark UK"), and the email
+// domain is often somebody else's entirely — the row that prompted this rule is
+// Vuori's site listing `info@afterpay.com`.
+//
+// Normalising in TypeScript rather than SQL keeps ONE definition of "same company"
+// (scrape.ts) instead of a second, subtly different one written as a regex in
+// Postgres. The table is small enough that reading it whole costs nothing.
+async function companyPeers(
+  svc: SupabaseClient,
+  contactId: string,
+): Promise<{ domain: string; peers: CompanyRow[] } | null> {
+  const { data: self } = await svc.from('contacts').select('website').eq('id', contactId).maybeSingle()
+  const domain = normalizeDomain(self?.website ?? '')
+  if (!domain) return null // no website recorded → nothing safe to group on
+
+  const { data } = await svc
+    .from('contacts')
+    .select('id, website, status, last_emailed_at')
+    .neq('id', contactId)
+  const peers = ((data ?? []) as CompanyRow[]).filter((r) => normalizeDomain(r.website ?? '') === domain)
+  return { domain, peers }
+}
+
 export async function sendPitch(
   svc: SupabaseClient,
   input: SendPitchInput,
@@ -134,6 +176,20 @@ export async function sendPitch(
       throw new SendBlockedError(
         'capped',
         `Daily cap reached — ${sent} of ${cap} sent in the last 24 hours.`,
+      )
+    }
+
+    // Refuse to pitch a company twice, even through a different inbox. This is the
+    // LAST line rather than the only one — the post-send sweep below archives the
+    // duplicates up front — but it is the one that holds when two rows for the same
+    // company are claimed in a single cron batch: the first send stamps
+    // last_emailed_at, so by the time the second is processed this check sees it.
+    const company = await companyPeers(svc, contactId)
+    const alreadyContacted = company?.peers.find((p) => p.status === 'sent' || p.last_emailed_at)
+    if (alreadyContacted) {
+      throw new SendBlockedError(
+        'duplicate_company',
+        `${company!.domain} has already been contacted at a different address — not sending twice.`,
       )
     }
   }
@@ -193,6 +249,41 @@ export async function sendPitch(
       .eq('id', contactId)
     if (markErr) {
       return { id: sentId, sentAt: now, warning: `Sent, but could not update the contact: ${markErr.message}` }
+    }
+
+    // This company is now done, so retire its other addresses.
+    //
+    // Cancelling the QUEUE ROWS is the part that actually prevents a second email —
+    // archiving the contact alone is cosmetic, because an already-queued row would
+    // still be picked up by the next cron tick. Re-read rather than reusing the
+    // pre-send list so anything queued while this message was in flight is included.
+    //
+    // Only 'new' and 'queued' are swept: 'replied' and 'inbound' mean the brand
+    // engaged, which is never something to bury.
+    const after = await companyPeers(svc, contactId)
+    const stale = (after?.peers ?? [])
+      .filter((p) => p.status === 'new' || p.status === 'queued')
+      .map((p) => p.id)
+
+    if (stale.length > 0) {
+      await svc
+        .from('send_queue')
+        .update({
+          status: 'canceled',
+          error: 'Superseded — this company was emailed at another address.',
+          updated_at: now,
+        })
+        .in('contact_id', stale)
+        .eq('status', 'queued')
+
+      const { error: sweepErr } = await svc.from('contacts').update({ status: 'skip' }).in('id', stale)
+      if (sweepErr) {
+        return {
+          id: sentId,
+          sentAt: now,
+          warning: `Sent, but could not archive ${stale.length} duplicate contact(s): ${sweepErr.message}`,
+        }
+      }
     }
   }
 

@@ -128,6 +128,15 @@ Deno.serve(async (req: Request): Promise<Response> => {
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
 
+      // A duplicate is not a failure and must never be retried — retrying can only
+      // ever reach the same verdict. Cancel the row and archive the contact so the
+      // company stops appearing in the working list at all.
+      if (e instanceof SendBlockedError && e.code === 'duplicate_company') {
+        await finish(svc, row.id, { status: 'canceled', error: msg })
+        await svc.from('contacts').update({ status: 'skip' }).eq('id', row.contact_id)
+        continue
+      }
+
       // Capped is not a failure — push it out and try again later. Everything else
       // gets three attempts before we stop bothering a brand's inbox with retries.
       if (e instanceof SendBlockedError && e.code === 'capped') {

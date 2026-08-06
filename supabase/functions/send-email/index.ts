@@ -52,8 +52,16 @@ async function handleSend(svc: SupabaseClient, body: SendBody): Promise<Response
     // Distinct statuses so the UI can react differently: 429 is "wait", 400/503 are
     // "fix something", 502 is "Google said no".
     if (e instanceof SendBlockedError) {
+      // 409 for a duplicate: the request was well-formed, it conflicts with a send
+      // that already happened. 400 would read as "you sent something malformed".
       const status =
-        e.code === 'capped' ? 429 : e.code === 'not_configured' || e.code === 'no_account' ? 503 : 400
+        e.code === 'capped'
+          ? 429
+          : e.code === 'duplicate_company'
+            ? 409
+            : e.code === 'not_configured' || e.code === 'no_account'
+              ? 503
+              : 400
       return json({ error: e.message, code: e.code }, status)
     }
     const invalid = e instanceof GoogleAuthError && e.invalidGrant
