@@ -22,6 +22,14 @@ import { ScrapeBrandsModal } from '@/components/admin/ScrapeBrandsModal'
 import { SendQueuePanel } from '@/components/admin/SendQueuePanel'
 import { EmailTemplateEditor } from '@/components/admin/EmailTemplateEditor'
 import { BulkQueueConfirm } from '@/components/admin/BulkQueueConfirm'
+import { ScrapeRunPanel } from '@/components/admin/ScrapeRunPanel'
+import {
+  SCRAPE_BATCH,
+  buildBatch,
+  remainingInDirectory,
+  startScrapeRun,
+  useScrapeRun,
+} from '@/lib/admin/scrapeRun'
 import { useAdminResource, adminKeys } from '@/lib/admin/queries'
 import { queueForOutreach, SEND_DELAY_MINUTES, type SendQueueRow } from '@/lib/admin/resources/sendQueue'
 import { saveSettings } from '@/lib/admin/resources/settings'
@@ -129,6 +137,11 @@ export function OutreachPage() {
     () => new Set(contacts.map((c) => normalizeDomain(c.website)).filter(Boolean)),
     [contacts],
   )
+
+  // Scrape state lives in its own store so a run survives switching admin tabs.
+  const scrapePhase = useScrapeRun((s) => s.phase)
+  const scrapeBusy = scrapePhase === 'scraping' || scrapePhase === 'finishing'
+  const undiscovered = useMemo(() => remainingInDirectory(existingDomains), [existingDomains])
 
   const filtered = useMemo(() => {
     const q = filters.search.toLowerCase()
@@ -274,14 +287,43 @@ export function OutreachPage() {
             Queue a brand and it sends in {SEND_DELAY_MINUTES} minutes — even if you close this tab.
           </p>
         </div>
-        <button
-          type="button"
-          onClick={() => setScraping(true)}
-          title="Find brand contacts by scraping their sites"
-          className="btn btn-ghost"
-        >
-          <Plus size={15} aria-hidden="true" /> Scrape new brands
-        </button>
+        <div className="flex items-center gap-2">
+          {/* One click, no dialog: it takes the next batch of directory brands you
+              haven't got yet and starts. Progress shows in the collapsed row below,
+              and you can keep queueing while it runs. */}
+          <button
+            type="button"
+            onClick={() => void startScrapeRun(() => buildBatch(existingDomains), () => void hydrate())}
+            disabled={scrapeBusy}
+            title={
+              undiscovered > 0
+                ? `Scrape the next ${Math.min(SCRAPE_BATCH, undiscovered)} brands from the curated list`
+                : `Curated list exhausted — find ${SCRAPE_BATCH} more brands automatically`
+            }
+            className="btn btn-primary"
+          >
+            {scrapeBusy ? (
+              <>
+                <Loader2 size={15} className="animate-spin" aria-hidden="true" /> Scraping…
+              </>
+            ) : (
+              <>
+                <Plus size={15} aria-hidden="true" /> Scrape new brands
+              </>
+            )}
+          </button>
+          {/* The directory is a fixed list, so the paste path is the only way to reach a
+              brand that isn't on it. Kept as a secondary control rather than deleted. */}
+          <button
+            type="button"
+            onClick={() => setScraping(true)}
+            className="btn btn-ghost btn-sm"
+            disabled={scrapeBusy}
+            title="Choose brands yourself, or paste your own websites"
+          >
+            Pick manually
+          </button>
+        </div>
       </header>
 
       <div className="outreach-grid">
@@ -309,6 +351,8 @@ export function OutreachPage() {
               <span>{queueError}</span>
             </div>
           )}
+
+          <ScrapeRunPanel />
 
           {bulkResult && (
             <div className="banner" role="status">

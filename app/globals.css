@@ -831,6 +831,30 @@ body {
 .studio .bq-list li:last-child { border-bottom: 0; }
 .studio .bq-brand { font-size: 13.5px; font-weight: 600; color: var(--ink); flex: none; }
 .studio .bq-email { font-size: 12px; color: var(--faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ── Scrape run readout ─────────────────────────────────────────────────────
+   Collapsed to a single line by design: the one-click flow is fire-and-carry-on,
+   so the resting state has to be ignorable. */
+.studio .scrape-run { border: 1px solid var(--line); border-radius: 12px; background: var(--panel); }
+.studio .scrape-run-head { display: flex; align-items: center; gap: 8px; padding: 8px 10px 8px 8px; }
+.studio .scrape-run-toggle {
+  flex: 1; min-width: 0; display: flex; align-items: center; gap: 9px;
+  background: none; border: 0; padding: 4px; font: inherit; color: var(--ink);
+  cursor: pointer; text-align: left; border-radius: 8px;
+}
+.studio .scrape-run-toggle:hover { background: var(--line2); }
+.studio .scrape-run-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.studio .scrape-run-ico { width: 26px; height: 26px; flex: none; }
+.studio .scrape-run-title { font-size: 13.5px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.studio .scrape-run-body {
+  display: flex; flex-direction: column; gap: 6px;
+  padding: 4px 12px 12px 12px; max-height: 300px; overflow-y: auto;
+  border-top: 1px solid var(--line2);
+}
+.studio .scrape-row { display: flex; align-items: center; gap: 9px; font-size: 13px; min-width: 0; }
+.studio .scrape-brand { font-weight: 600; color: var(--ink); flex: none; }
+.studio .scrape-site { color: var(--faint); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.studio .scrape-err { color: var(--muted); font-size: 12px; font-style: italic; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* The table still needs its own scroll inside the narrower column; the PAGE must
    never scroll sideways. */
 .studio .outreach-grid .panel { overflow-x: auto; }

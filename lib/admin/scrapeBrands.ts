@@ -92,10 +92,24 @@ export function parseBrandLines(text: string, country = ''): { inputs: ScrapeInp
   return { inputs, invalid }
 }
 
-export async function scrapeBrands(inputs: ScrapeInput[]): Promise<ScrapeSummary> {
+// Progress for a caller that shows the run live. Emitted per job so a 12-site run
+// reports as it goes instead of appearing frozen for two minutes.
+export type ScrapeEvent =
+  | { type: 'job-start'; index: number }
+  | { type: 'job-done'; index: number; result: ScrapeJobResult }
+  | { type: 'phase'; phase: 'enriching' | 'scoring' }
+
+export async function scrapeBrands(
+  inputs: ScrapeInput[],
+  onEvent?: (e: ScrapeEvent) => void,
+): Promise<ScrapeSummary> {
   const sb = supabaseBrowser
   if (!sb) throw new Error('Studio is not configured.')
   if (inputs.length === 0) throw new Error('Add at least one brand website.')
+
+  // Postgres does not promise that INSERT ... RETURNING preserves input order, so the
+  // caller's row index is resolved by website rather than by position.
+  const indexOf = new Map(inputs.map((i, idx) => [i.website, idx]))
 
   // 1. Queue the jobs. RLS `is_admin()` gates this write; .select() returns the new ids.
   const { data: jobs, error } = await sb
@@ -108,26 +122,31 @@ export async function scrapeBrands(inputs: ScrapeInput[]): Promise<ScrapeSummary
   //    domain, and one failed domain must not abort the rest.
   const results: ScrapeJobResult[] = []
   for (const job of jobs ?? []) {
+    const index = indexOf.get(job.website) ?? results.length
+    onEvent?.({ type: 'job-start', index })
+    let result: ScrapeJobResult
     try {
       const { data, error: e } = await sb.functions.invoke('scrape-static', { body: { job_id: job.id } })
       if (e) throw e
       const r = Array.isArray(data?.results) ? data.results[0] : null
-      results.push({
+      result = {
         brand: job.brand,
         website: job.website,
         found: typeof r?.found === 'number' ? r.found : 0,
         status: typeof r?.status === 'string' ? r.status : 'done',
         error: r?.error || undefined,
-      })
+      }
     } catch (e) {
-      results.push({
+      result = {
         brand: job.brand,
         website: job.website,
         found: 0,
         status: 'error',
         error: await fnErrorMessage(e, 'Scrape failed.'),
-      })
+      }
     }
+    results.push(result)
+    onEvent?.({ type: 'job-done', index, result })
   }
 
   const warnings: string[] = []
@@ -138,6 +157,7 @@ export async function scrapeBrands(inputs: ScrapeInput[]): Promise<ScrapeSummary
   }
 
   // 3. Enrich the freshly-scraped domains (Hunter). Best-effort.
+  onEvent?.({ type: 'phase', phase: 'enriching' })
   try {
     const { data, error: e } = await sb.functions.invoke('enrich', { body: {} })
     if (e) throw e

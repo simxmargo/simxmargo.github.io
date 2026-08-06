@@ -45,9 +45,16 @@ export function ContactsTable({
     )
   }
 
-  // Already-queued rows can't be queued again, so they're not tickable either —
-  // otherwise "select all" would promise work it can't do.
-  const selectable = contacts.filter((c) => !queuedContactIds.has(c.id)).map((c) => c.id)
+  // What can actually be queued. Already-queued is obvious; 'sent' and 'skip' are the
+  // additions — a sent brand would be refused by the duplicate guard anyway, and an
+  // archived one was explicitly taken out of the working list, so offering Queue on
+  // either is an action that either fails or undoes a decision by accident.
+  //
+  // This gates the CHECKBOX as well as the button: leaving the rows tickable would let
+  // "select all" promise work the bulk run then silently drops.
+  const canQueue = (c: Contact) =>
+    !queuedContactIds.has(c.id) && c.status !== 'sent' && c.status !== 'skip'
+  const selectable = contacts.filter(canQueue).map((c) => c.id)
   const selectedHere = selectable.filter((id) => selectedIds.has(id)).length
   const allSelected = selectable.length > 0 && selectedHere === selectable.length
 
@@ -87,7 +94,7 @@ export function ContactsTable({
                   className="tick"
                   checked={selectedIds.has(c.id)}
                   onChange={() => onToggleSelect(c.id)}
-                  disabled={queuedContactIds.has(c.id) || Boolean(disabledReason)}
+                  disabled={!canQueue(c) || Boolean(disabledReason)}
                   aria-label={`Select ${c.brand}`}
                 />
               </td>
@@ -120,7 +127,7 @@ export function ContactsTable({
                     <span className="pill pill-ok" style={{ whiteSpace: 'nowrap' }}>
                       <Check size={12} aria-hidden="true" /> Queued
                     </span>
-                  ) : (
+                  ) : c.status === 'sent' || c.status === 'skip' ? null : (
                     <button
                       onClick={() => onQueue(c)}
                       disabled={pendingId !== null || Boolean(disabledReason)}
