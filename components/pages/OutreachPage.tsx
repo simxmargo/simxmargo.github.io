@@ -23,6 +23,7 @@ import { EmailTemplateEditor } from '@/components/admin/EmailTemplateEditor'
 import { BulkQueueConfirm } from '@/components/admin/BulkQueueConfirm'
 import { ScrapeRunPanel } from '@/components/admin/ScrapeRunPanel'
 import { SCRAPE_BATCH, buildBatch, startScrapeRun, useScrapeRun } from '@/lib/admin/scrapeRun'
+import { oneContactPerCompany } from '@/lib/admin/dedupeContacts'
 import { useAdminResource, adminKeys } from '@/lib/admin/queries'
 import { queueForOutreach, SEND_DELAY_MINUTES, type SendQueueRow } from '@/lib/admin/resources/sendQueue'
 import { saveSettings } from '@/lib/admin/resources/settings'
@@ -253,8 +254,14 @@ export function OutreachPage() {
   // Selection can outlive a queue action (rows queued elsewhere, or paging), so the
   // targets are recomputed rather than trusted — the confirm must list exactly what
   // will be queued, not what was ticked at some earlier point.
-  const bulkTargets = useMemo(
-    () => contacts.filter((c) => selected.has(c.id) && !queuedContactIds.has(c.id)),
+  // One address per company. A brand's contact page often yields several (meandem.com
+  // produced 21, one per store), and queueing all of them pitches the same company
+  // repeatedly — sendPitch would refuse the extras, but only after they were queued.
+  const { picked: bulkTargets, skipped: bulkDuplicates } = useMemo(
+    () =>
+      oneContactPerCompany(
+        contacts.filter((c) => selected.has(c.id) && !queuedContactIds.has(c.id)),
+      ),
     [contacts, selected, queuedContactIds],
   )
   // Queuing past the cap isn't blocked — drain-queue defers those rows by 30 minutes
@@ -335,7 +342,13 @@ export function OutreachPage() {
             <div className="bulk-bar" role="region" aria-label="Bulk actions">
               <span className="bulk-count">
                 {selectedCount} selected
-                {selectedCount > remainingToday && (
+                {bulkDuplicates.length > 0 && (
+                  <span className="muted-sm">
+                    {' '}
+                    · {bulkDuplicates.length} duplicate{bulkDuplicates.length === 1 ? '' : 's'} skipped
+                  </span>
+                )}
+                {bulkTargets.length > remainingToday && (
                   <span className="muted-sm">
                     {' '}
                     · {remainingToday} can go out today, the rest wait

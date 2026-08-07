@@ -35,6 +35,7 @@ import {
   USER_AGENT,
 } from '../_shared/scrape.ts'
 import { findBrandEmail } from '../_shared/braveSearch.ts'
+import { emailBelongsToBrand } from '../_shared/hosts.ts'
 
 // Domains per invocation. Measured at ~18s per site (1.5s politeness delay across 6
 // contact pages, plus timeouts), so 5 is ~90s — comfortably inside the 150s wall-clock
@@ -166,6 +167,11 @@ Deno.serve(async (req) => {
         statuses.push(code)
         if (!html) continue
         for (const e of extractEmails(html)) {
+          // A brand's page carries other people's addresses: @font-face licence headers
+          // (manhattan-denim.com yielded four type designers and no real contact),
+          // embedded Shopify app widgets, agency credits. Shape filtering cannot tell
+          // those apart from the brand's own — only ownership can.
+          if (!emailBelongsToBrand(e, domain, job.brand)) continue
           if (!emails.has(e)) emails.set(e, pageUrl(domain, path))
         }
         if (emails.size >= MAX_EMAILS_PER_DOMAIN) break

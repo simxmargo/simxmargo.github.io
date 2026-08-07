@@ -8,16 +8,15 @@
 // Docs: https://api-dashboard.search.brave.com/app/documentation/web-search
 // NOTE: the free plan is rate-limited to ~1 request/second — callers must pace themselves.
 
-import { hostOf } from './hosts.ts'
+import {
+  apexHost,
+  brandFromTitle,
+  emailBelongsToBrand,
+  hostOf,
+  isPlausibleBrandHost,
+} from './hosts.ts'
 
 const ENDPOINT = 'https://api.search.brave.com/res/v1/web/search'
-
-/** Free mailbox providers: allowed only when the address echoes the brand. */
-const FREE_MAIL = [
-  'gmail.com', 'googlemail.com', 'yahoo.com', 'hotmail.com', 'outlook.com',
-  'live.com', 'icloud.com', 'aol.com', 'proton.me', 'protonmail.com', 'gmx.com',
-  'mail.com', 'yandex.com', 'naver.com', 'qq.com', '163.com',
-]
 
 /** Addresses that are never a human contact — platform noise found on any page. */
 const JUNK_LOCAL = [
@@ -65,35 +64,8 @@ function isJunk(email: string): boolean {
   return false
 }
 
-const squashLocal = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '')
-
-/**
- * Is this address plausibly the brand's own?
- *
- * Same-domain is self-evident. A free mailbox is accepted only when the local part
- * echoes the brand — otherwise a directory page listing ten businesses would hand us
- * whichever gmail appeared first, and we would pitch a stranger.
- */
-export function belongsToBrand(email: string, website: string, brand: string): boolean {
-  const domain = email.split('@')[1]?.toLowerCase() ?? ''
-  if (!domain) return false
-
-  const site = website.toLowerCase().replace(/^www\./, '')
-  if (domain === site || domain.endsWith(`.${site}`) || site.endsWith(`.${domain}`)) return true
-
-  if (FREE_MAIL.includes(domain)) {
-    const local = squashLocal(email.split('@')[0])
-    const siteLabel = squashLocal(site.split('.')[0])
-    const brandKey = squashLocal(brand)
-    if (!local) return false
-    return (
-      (siteLabel.length >= 4 && (local.includes(siteLabel) || siteLabel.includes(local))) ||
-      (brandKey.length >= 4 && (local.includes(brandKey) || brandKey.includes(local)))
-    )
-  }
-
-  return false
-}
+/** Ownership test lives in hosts.ts — the static scraper applies the same rule. */
+export const belongsToBrand = emailBelongsToBrand
 
 /** Lower is better. Role mailboxes beat personal ones; same-domain beats free mail. */
 function rank(email: string, website: string): number {
@@ -115,10 +87,10 @@ function harvest(r: BraveResult): EmailHit[] {
 }
 
 /** One Brave query. Returns [] on any failure so the caller can try the next phrasing. */
-async function search(apiKey: string, query: string): Promise<BraveResult[]> {
+async function search(apiKey: string, query: string, offset = 0): Promise<BraveResult[]> {
   try {
     const res = await fetch(
-      `${ENDPOINT}?q=${encodeURIComponent(query)}&count=20&result_filter=web&safesearch=off`,
+      `${ENDPOINT}?q=${encodeURIComponent(query)}&count=20&offset=${offset}&result_filter=web&safesearch=off`,
       {
         headers: {
           accept: 'application/json',
@@ -181,4 +153,64 @@ export async function findBrandEmail(
   if (!candidates.length) return null
   candidates.sort((a, b) => rank(a.email, site) - rank(b.email, site))
   return candidates[0]
+}
+
+// ── Brand discovery (the fallback when ScrapeCreators credits run out) ───────────
+
+/** Same shape `instagramSearch` produces, so discover-brands can use either source. */
+export interface BraveBrandCandidate {
+  brand: string
+  website: string
+  country: string
+  handle: string
+  followers: number
+  email: string
+}
+
+// A cross product, not a list — 18 niches x 6 framings = 108 distinct searches, each
+// pageable 4 deep. That is ~430 result pages before a single query would repeat.
+const NICHES = [
+  'activewear', 'swimwear', 'lingerie', 'jewellery', 'skincare', 'haircare',
+  'makeup', 'sunglasses', 'handbags', 'sneakers', 'denim', 'loungewear',
+  'outerwear', 'athleisure', 'fragrance', 'streetwear', 'knitwear', 'accessories',
+]
+const FRAMINGS = [
+  'independent brand official site',
+  'sustainable brand official store',
+  'new direct to consumer brand',
+  'small brand official website',
+  'emerging brand shop online',
+  'boutique brand official site',
+]
+
+export function braveQueryPool(): string[] {
+  const out: string[] = []
+  for (const n of NICHES) for (const f of FRAMINGS) out.push(`${n} ${f}`)
+  return out
+}
+
+/** One discovery search. Returns [] on any failure — the caller decides whether to try more. */
+export async function braveDiscover(
+  apiKey: string,
+  query: string,
+  offset: number,
+): Promise<BraveBrandCandidate[]> {
+  const results = await search(apiKey, query, offset)
+  const out: BraveBrandCandidate[] = []
+  for (const r of results) {
+    const host = hostOf(r.url ?? '')
+    if (!host || !isPlausibleBrandHost(host)) continue
+    // Collapse regional subdomains BEFORE storing, so the domain we scrape and
+    // de-duplicate on is the company's, not one of its country storefronts.
+    const website = apexHost(host)
+    out.push({
+      brand: brandFromTitle(r.title ?? '', host),
+      website,
+      country: '',
+      handle: '',
+      followers: 0,
+      email: '',
+    })
+  }
+  return out
 }
