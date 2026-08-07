@@ -1,9 +1,14 @@
 # Backend design — brand-outreach-studio
 
-> Status: **scrape → enrich → qualify is LIVE** (deployed 2026-06-28, admin-gated).
-> The Contacts "Scrape new brands" button now queues `scrape_jobs` and runs the three
-> Edge Functions; new leads flow into the live `contacts` table. Enrichment + AI
-> scoring degrade gracefully until `HUNTER_API_KEY` / `ANTHROPIC_API_KEY` are set.
+> Status: **discover → scrape → send is LIVE** (admin-gated). "Scrape new brands"
+> discovers brands on Instagram, queues `scrape_jobs`, and `pg_cron` drains them into
+> the live `contacts` table.
+>
+> **Superseded 2026-08-07:** the Hunter (`enrich`) and Anthropic (`qualify`) functions
+> were deleted. Neither ever had an API key, and both were reachable only from the
+> browser-driven scrape loop that the cron drain replaced. `fit_score` went with them —
+> contacts sort newest first. Email discovery is now Instagram bios first, then the
+> Brave search index (§5).
 > **Gmail OAuth (§6b) is now BUILT** — `gmail-oauth` Edge Function + migration
 > `0012_sending_account.sql` + the live Settings → Sending account card. Setup steps
 > (Google Cloud app, secrets, the `--no-verify-jwt` deploy) are in
@@ -22,11 +27,11 @@ in Supabase Edge Functions driven by `pg_cron`.
 
 ```
   React/Vite UI ──(anon key)──▶  Supabase Postgres  ◀──(service-role)── Edge Functions
-   - add brand URLs                - scrape_jobs                          - scrape-static
-   - view contacts                 - contacts                            - enrich
-   - draft + queue emails          - send_queue          pg_cron ───────▶ - qualify (AI)
-   - watch send status             - suppression_list   (every ~1 min)    - send-one
-   - edit settings                 - app_settings                         - gmail-oauth
+   - start a run                   - scrape_jobs                          - discover-brands
+   - view contacts                 - contacts                             - scrape-static
+   - draft + queue emails          - send_queue          pg_cron ───────▶ - send-one
+   - watch send status             - suppression_list   (every ~1 min)    - gmail-oauth
+   - edit settings                 - app_settings
                                           ▲
                                           │  (only for JS-rendered sites)
                                    optional local Playwright worker
@@ -37,7 +42,7 @@ in Supabase Edge Functions driven by `pg_cron`.
 | Concern | Runtime | Why |
 |---|---|---|
 | UI / control panel | React + Vite (anon key) | No secrets, no scraping. Just inserts/RPCs + reads. |
-| Static scraping, enrichment, AI scoring, sending | Edge Functions (Deno) | I/O-bound; fits the 2s-CPU / 256MB / 150s limits. |
+| Discovery, static scraping, email lookup, sending | Edge Functions (Deno) | I/O-bound; fits the 2s-CPU / 256MB / 150s limits. |
 | Scheduling + daily cap | `pg_cron` + `pg_net` | Reliable, server-side, survives the browser being closed. |
 | JS-rendered / anti-bot sites | **Optional** local Playwright script | Headless browsers can't run in Edge Functions. Add lazily. |
 
@@ -71,8 +76,9 @@ Input: a `scrape_jobs` row (brand + website). Output: rows in `contacts`.
 4. Classify each: `press@`/`pr@` → `press`; `partner*`/`collab*` → `partnerships`;
    `info@`/`hello@`/`contact@` → `generic`; a `first.last@` → `named`.
 5. Upsert into `contacts` (the `unique(email)` constraint dedups).
-6. If **no emails found**, set the job to `needs_browser` so the optional Playwright
-   worker can pick it up later. Mark `done`/`error` in a `finally`-style block.
+6. If **no emails found**, ask the Brave search index for the same pages (§5) before
+   giving up. Only if that is also empty does the job become `needs_browser`, for the
+   optional Playwright worker. Mark `done`/`error` in a `finally`-style block.
 
 **Etiquette (build it in, don't bolt on):** sequential requests, ~1 req / few
 seconds per domain, a descriptive `User-Agent`
@@ -85,55 +91,64 @@ areas, **never LinkedIn**. Cache results so re-runs cost nothing.
 
 ---
 
-## 4. Enrichment (`enrich` Edge Function) — Hunter.io free-first — ✅ deployed
+## 4. Discovery (`discover-brands` Edge Function) — Instagram via ScrapeCreators
 
-Implemented in `supabase/functions/enrich/index.ts`. Invoke for specific brands
-with `POST {domains:[...]}` or auto-pick scraped-but-unenriched jobs with `POST {}`.
-Adds the `scrape_jobs.enriched_at` marker (migration `0002_enrich.sql`) so a re-run
-never re-spends a Hunter credit on a domain it already searched. **Deployed +
-admin-gated.** Runs automatically after a scrape (the chain in `scrapeBrands.ts`).
-Without `HUNTER_API_KEY` it returns `{enriched:0, note}` — a no-op, never an error.
+Implemented in `supabase/functions/discover-brands/index.ts`. `POST {limit: 100}`,
+admin-gated. Replaced a hand-written list of 64 domains, which had a hard floor and —
+being all mega-brands — supplied most of the `needs_browser` failures.
 
-Hunter's **free plan includes API access** (~50 credits/month ≈ 25 searches + 50
-verifications; no card; Domain Search capped at **10 emails/domain** on free).
-Spend it carefully:
+Instagram is a better discovery surface than a web index: a profile carries the brand's
+own site, its size, and often a contact address, so one credit returns ten candidates
+already part-enriched.
 
-1. At startup, read `GET /v2/account?api_key=…` (free, no quota) to know remaining
-   credits. **Stop enriching when low.**
-2. For a brand domain: `GET /v2/domain-search?domain={domain}&api_key=…`. Harvest
-   the up-to-10 emails with their `type` (generic/personal), `confidence`,
-   `first_name`, `last_name`, `position`. Write to `contacts`.
-3. **Prefer generic role inboxes** (`press@`, `partnerships@`) as the default
-   outreach target — they need no verification credit and are almost always valid.
-4. For a specific named person not returned: generate likely patterns
-   (`first.last@`, `flast@`) for free, then spend **one** `GET /v2/email-verifier`
-   (0.5 credit) before trusting it. Never cold-email an unverified guess.
-5. **Cache everything** in `contacts` so re-runs cost zero credits.
-6. When Hunter's quota is gone, degrade gracefully behind the same interface:
-   Snov.io free (50 credits) / Apollo.io free (~100/mo) / pure pattern + verify.
+- **`_shared/instagramSearch.ts`** — `GET /v1/instagram/search/profiles`, 1 credit per
+  search (0 when cached). Query pool is 20 niches x 7 commerce framings = 140 distinct
+  searches. The framings all say "shop"/"store"/"brand" deliberately: a bare topic
+  ("korean skincare") returns dermatologists and beauty bloggers; the same topic plus a
+  retail word returns the shops.
+- **`classifyProfile()`** — the search also returns CREATORS, who are worthless to
+  pitch. Scores own-site (+3), commerce category (+2), business account (+1), creator
+  category (-3), no site (-2); >= 2 is a brand. Measured ~14 accepted / 6 rejected per
+  three searches, with no creator misclassified as a brand.
+- **`echoesBrand()`** — THE GATE. Bios link to all sorts of things, and taking the first
+  link produced real mistakes: `@foursistersboutique` linked a magazine article and would
+  have been pitched as "Omahamagazine"; `@tiffanyandco` linked an affiliate shim and
+  became "Likeshop". A brand's own domain echoes its handle or a word of its name.
+- A candidate whose bio published an address is written straight to `contacts` and never
+  enters `scrape_jobs` — it costs no further request.
 
-Auth: `api_key` query param, or header `X-API-KEY`. Use `test-api-key` for
-integration tests (returns dummy data, no quota).
+Cost: ~20 credits per 100 brands. Without `SCRAPECREATORS_API_KEY` it falls back to the
+Wikidata dataset (~1,100 apparel companies, no key) so the button is never dead.
 
 ---
 
-## 5. AI scoring (`qualify` Edge Function) — ✅ already ported
+## 5. Email lookup — bios first, then the Brave index
 
-Implemented (ported from the retired `brand-outreach` Python CLI's `qualify.py`):
+There is no Hunter step. Addresses come from three places, cheapest first:
 
-- **`supabase/functions/_shared/qualify.ts`** — `scoreBrandFit()`: a forced
-  tool-use call to Claude (`claude-haiku-4-5-20251001`) returning
-  `{fit_score 1-10, reason}`, enum-constrained + score-clamped. Dependency-free
-  `fetch` to the Anthropic Messages API (no SDK bundle).
-- **`supabase/functions/qualify/index.ts`** — reads the creator profile from
-  `app_settings`, finds up to 10 contacts with a null `fit_score`, scores each,
-  and writes `fit_score` + `fit_reason` back.
+1. **The Instagram bio**, at discovery time (§4). Free, and it hit ~60% of profiles in
+   sampling.
+2. **The brand's own contact pages**, via `scrape-static` (§3).
+3. **The Brave search index**, as the fallback inside `scrape-static`.
 
-Cost ~fractions of a cent per lead. **Deployed + admin-gated**, and standardized on
-`_shared/http.ts` (CORS/preflight) so the browser can invoke it. Runs after enrich in
-the scrape chain. Without `ANTHROPIC_API_KEY` it returns `{scored:0, note}` — a no-op,
-not a 500 — so the chain never hard-fails. Set the key to switch scoring on:
-`supabase secrets set ANTHROPIC_API_KEY=…`.
+Step 3 is the one that matters. Two thirds of `scrape_jobs` came back `needs_browser`
+because the site answered 403/429 or timed out — Brave has already crawled those exact
+pages, so asking its index gets the address without touching the origin that refuses us.
+
+`_shared/braveSearch.ts` → `findBrandEmail()` runs up to three phrasings and stops at the
+first address that passes `belongsToBrand()`:
+
+- **Same-domain** addresses are accepted outright.
+- **Free mailboxes** (gmail etc.) only when the local part echoes the brand — otherwise a
+  directory page listing ten businesses hands us whichever gmail appears first and we
+  pitch a stranger.
+- Junk is dropped: `noreply@`, platform noise (`sentry`, `wixpress`), and image filenames
+  that regex as addresses (`logo@2x.png`).
+- Role mailboxes rank first (`press@`, `partnerships@` before `info@`, `support@`).
+
+Brave's free plan is ~1 request/second, so callers pace themselves; `scrape-static` also
+stops offering the fallback past 110s so a batch of dead hosts can't blow the 150s
+wall-clock budget.
 
 ---
 
@@ -230,9 +245,10 @@ sends out to respect Gmail's ~60/min ceiling.
 ## 8. Secrets & RLS
 
 - Edge Function Secrets (`supabase secrets set`): `GMAIL_CLIENT_ID`,
-  `GMAIL_CLIENT_SECRET`, `GMAIL_REFRESH_TOKEN`, `HUNTER_API_KEY`,
-  `ANTHROPIC_API_KEY`. Read with `Deno.env.get()`. The **service-role key** lives
-  only in functions, never the frontend.
+  `GMAIL_CLIENT_SECRET`, `GMAIL_REFRESH_TOKEN`, `SCRAPECREATORS_API_KEY` (discovery,
+  §4), `BRAVE_API_KEY` (email fallback, §5), `CRON_SECRET` (the pg_cron drains).
+  Read with `Deno.env.get()`. The **service-role key** lives only in functions, never
+  the frontend.
 - Frontend: only `VITE_SUPABASE_URL` + `VITE_SUPABASE_ANON_KEY`.
 - RLS: single owner; policies allow `authenticated`. See the migration.
 
@@ -242,7 +258,7 @@ sends out to respect Gmail's ~60/min ceiling.
 
 | UI element | Replaces stub with |
 |---|---|
-| "Scrape new brands" button (Contacts) | ✅ DONE — `ScrapeBrandsModal` → `scrapeBrands()` → insert `scrape_jobs` → `scrape-static` + `enrich` + `qualify` |
+| "Scrape new brands" button (Outreach) | ✅ DONE — `buildBatch()` → `discover-brands` → `queueScrapeJobs()` → `pg_cron` drains `scrape-static` |
 | Mock `contacts` in the store | a Supabase `select * from contacts` |
 | "Approve & send" (Queue) | insert `send_queue` row → `pg_cron` → `send-one` |
 | "Connect Gmail" (Settings) | ✅ DONE — `SendingAccountCard` → `gmail-oauth` (start/callback/test/disconnect) → `gmail_account` |
@@ -254,10 +270,11 @@ sends out to respect Gmail's ~60/min ceiling.
 
 1. **Supabase project** + apply `0001_init.sql` **and `0002_enrich.sql`**; swap the
    store's mock data for a real `contacts` query (read-only first).
-2. ✅ **`scrape-static` + `enrich`** *(deployed + wired 2026-06-28)* → real contacts
-   flow in from the UI "Scrape new brands" button (`ScrapeBrandsModal` →
-   `scrapeBrands()` inserts a `scrape_jobs` row → `scrape-static` → `enrich` → `qualify`).
-3. ✅ **`qualify`** *(deployed)* → fit scores populate once `ANTHROPIC_API_KEY` is set.
+2. ✅ **`discover-brands` + `scrape-static`** *(Instagram discovery 2026-08-07)* → real
+   contacts flow in from the "Scrape new brands" button (`buildBatch()` → discovery →
+   `queueScrapeJobs()` → `pg_cron` drains `scrape-static`, which falls back to the Brave
+   index when a site blocks it).
+3. ~~`qualify`~~ — deleted 2026-08-07 along with `enrich`; see the status note at the top.
 4. ✅ **Gmail OAuth** *(built 2026-07-30)* → connect/test/disconnect from Settings.
    Then **`send-one` + `pg_cron`** → real sending with the daily cap (still to build;
    `_shared/gmail.ts` `refreshAccessToken()` is the seam it plugs into).
