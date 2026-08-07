@@ -25,8 +25,6 @@ const SAMPLE_CONTACT: Contact = {
   emailType: 'partnerships',
   country: '',
   website: '',
-  fitScore: null,
-  fitReason: '',
   status: 'new',
   notes: '',
   lastEmailedAt: null,

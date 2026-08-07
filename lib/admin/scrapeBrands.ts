@@ -1,41 +1,19 @@
 // Client-side orchestration for the Contacts "Scrape new brands" flow.
 //
-// The static SPA holds no secrets and never scrapes; it only (1) inserts scrape_jobs
-// rows through the authenticated admin session (RLS = is_admin()) and (2) triggers the
-// Edge Functions, which do the I/O server-side with the service-role key:
+// The static SPA holds no secrets and never scrapes. It only inserts scrape_jobs rows
+// through the authenticated admin session (RLS = is_admin()) and then watches them:
 //
-//   insert scrape_jobs  →  scrape-static (per job)  →  enrich (Hunter)  →  qualify (AI)
+//   discover-brands (Instagram)  →  insert scrape_jobs  →  pg_cron drains scrape-static
+//                                                          (falls back to Brave search)
 //
-// enrich/qualify are best-effort: without HUNTER_API_KEY / ANTHROPIC_API_KEY they
-// degrade to a graceful no-op (a `note`), so a scrape still succeeds — you just get
-// raw contacts without enrichment/fit scores until the keys are set. See
-// docs/BACKEND_DESIGN.md §9–§10.
+// Everything that costs an API key runs server-side in the Edge Functions.
 
 import { supabaseBrowser } from '@/lib/supabase/browser'
-import { fnErrorMessage } from '@/lib/admin/fnError'
 
 export interface ScrapeInput {
   brand: string
   website: string // bare hostname (e.g. "nike.com")
   country: string
-}
-
-export interface ScrapeJobResult {
-  brand: string
-  website: string
-  found: number // brand-new contacts inserted
-  status: string // 'done' | 'needs_browser' | 'error'
-  error?: string
-}
-
-export interface ScrapeSummary {
-  results: ScrapeJobResult[]
-  totalFound: number
-  enrichedAdded?: number
-  enrichNote?: string
-  scoredCount?: number
-  scoreNote?: string
-  warnings: string[] // soft failures (enrich/qualify unavailable) — never block the scrape
 }
 
 // nike.com → "Nike";  the-label.co → "The Label". Used when no brand name is given.
@@ -151,90 +129,3 @@ export async function countFoundByWebsite(websites: string[]): Promise<Map<strin
   return out
 }
 
-// Progress for a caller that shows the run live. Emitted per job so a 12-site run
-// reports as it goes instead of appearing frozen for two minutes.
-export type ScrapeEvent =
-  | { type: 'job-start'; index: number }
-  | { type: 'job-done'; index: number; result: ScrapeJobResult }
-  | { type: 'phase'; phase: 'enriching' | 'scoring' }
-
-export async function scrapeBrands(
-  inputs: ScrapeInput[],
-  onEvent?: (e: ScrapeEvent) => void,
-): Promise<ScrapeSummary> {
-  const sb = supabaseBrowser
-  if (!sb) throw new Error('Studio is not configured.')
-  if (inputs.length === 0) throw new Error('Add at least one brand website.')
-
-  // Postgres does not promise that INSERT ... RETURNING preserves input order, so the
-  // caller's row index is resolved by website rather than by position.
-  const indexOf = new Map(inputs.map((i, idx) => [i.website, idx]))
-
-  // 1. Queue the jobs. RLS `is_admin()` gates this write; .select() returns the new ids.
-  const { data: jobs, error } = await sb
-    .from('scrape_jobs')
-    .insert(inputs.map((i) => ({ brand: i.brand, website: i.website, country: i.country || '' })))
-    .select('id, brand, website')
-  if (error) throw new Error(error.message)
-
-  // 2. Scrape each job. Sequential by design — the function is polite-rate-limited per
-  //    domain, and one failed domain must not abort the rest.
-  const results: ScrapeJobResult[] = []
-  for (const job of jobs ?? []) {
-    const index = indexOf.get(job.website) ?? results.length
-    onEvent?.({ type: 'job-start', index })
-    let result: ScrapeJobResult
-    try {
-      const { data, error: e } = await sb.functions.invoke('scrape-static', { body: { job_id: job.id } })
-      if (e) throw e
-      const r = Array.isArray(data?.results) ? data.results[0] : null
-      result = {
-        brand: job.brand,
-        website: job.website,
-        found: typeof r?.found === 'number' ? r.found : 0,
-        status: typeof r?.status === 'string' ? r.status : 'done',
-        error: r?.error || undefined,
-      }
-    } catch (e) {
-      result = {
-        brand: job.brand,
-        website: job.website,
-        found: 0,
-        status: 'error',
-        error: await fnErrorMessage(e, 'Scrape failed.'),
-      }
-    }
-    results.push(result)
-    onEvent?.({ type: 'job-done', index, result })
-  }
-
-  const warnings: string[] = []
-  const summary: ScrapeSummary = {
-    results,
-    totalFound: results.reduce((a, r) => a + r.found, 0),
-    warnings,
-  }
-
-  // 3. Enrich the freshly-scraped domains (Hunter). Best-effort.
-  onEvent?.({ type: 'phase', phase: 'enriching' })
-  try {
-    const { data, error: e } = await sb.functions.invoke('enrich', { body: {} })
-    if (e) throw e
-    summary.enrichedAdded = typeof data?.added === 'number' ? data.added : 0
-    if (typeof data?.note === 'string') summary.enrichNote = data.note
-  } catch (e) {
-    warnings.push(await fnErrorMessage(e, 'Enrichment unavailable.'))
-  }
-
-  // 4. AI fit-score the new contacts. Best-effort.
-  try {
-    const { data, error: e } = await sb.functions.invoke('qualify', { body: {} })
-    if (e) throw e
-    summary.scoredCount = typeof data?.scored === 'number' ? data.scored : 0
-    if (typeof data?.note === 'string') summary.scoreNote = data.note
-  } catch (e) {
-    warnings.push(await fnErrorMessage(e, 'Scoring unavailable.'))
-  }
-
-  return summary
-}

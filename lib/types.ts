@@ -19,8 +19,6 @@ export interface Contact {
   emailType: EmailType
   country: string
   website: string
-  fitScore: number | null // 1-10 from the AI qualifier (null until scored)
-  fitReason: string
   status: ContactStatus
   notes: string
   lastEmailedAt: string | null

@@ -4,7 +4,6 @@ import { useEffect, useState } from 'react'
 import { X, Send } from 'lucide-react'
 import type { Contact, CreatorProfile } from '@/lib/types'
 import { buildDraft } from '@/lib/emailTemplate'
-import { FitChip } from './StatusBadge'
 
 export function ComposeDrawer({
   contact,
@@ -60,14 +59,6 @@ export function ComposeDrawer({
           >
             <X size={18} aria-hidden="true" />
           </button>
-        </div>
-
-        <div
-          className="flex items-center gap-2 px-5 py-3"
-          style={{ borderBottom: '1px solid var(--line)', background: 'var(--field)', fontSize: 13 }}
-        >
-          <FitChip score={contact.fitScore} />
-          <span style={{ color: 'var(--muted)' }}>{contact.fitReason}</span>
         </div>
 
         <div className="flex-1 space-y-4 overflow-y-auto px-5 py-4">

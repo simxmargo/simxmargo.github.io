@@ -28,8 +28,6 @@ function mapContact(r: any): ContactRow {
     emailType: r.email_type,
     country: r.country ?? '',
     website: r.website ?? '',
-    fitScore: r.fit_score ?? null,
-    fitReason: r.fit_reason ?? '',
     status: r.status,
     notes: r.notes ?? '',
     lastEmailedAt: r.last_emailed_at ?? null,
@@ -37,8 +35,8 @@ function mapContact(r: any): ContactRow {
   }
 }
 
-// Replicates GET /api/admin/contacts: list every contact ranked by fit_score (nulls
-// last), then newest first, mapped snake_case → camelCase. Throws on error (RLS gates).
+// Replicates GET /api/admin/contacts: every contact newest first, mapped snake_case →
+// camelCase. Throws on error (RLS gates).
 export async function readContacts(): Promise<ContactRow[]> {
   const sb = supabaseBrowser
   if (!sb) throw new Error('Studio is not configured.')
@@ -46,7 +44,6 @@ export async function readContacts(): Promise<ContactRow[]> {
   const { data, error } = await sb
     .from('contacts')
     .select('*')
-    .order('fit_score', { ascending: false, nullsFirst: false })
     .order('created_at', { ascending: false })
   if (error) throw new Error(error.message)
   return (data ?? []).map(mapContact)

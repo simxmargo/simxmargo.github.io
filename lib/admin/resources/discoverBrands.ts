@@ -2,15 +2,21 @@ import { supabaseBrowser } from '@/lib/supabase/browser'
 import { fnErrorMessage } from '@/lib/admin/fnError'
 import type { ScrapeInput } from '@/lib/admin/scrapeBrands'
 
-// Client half of `discover-brands`. The function does the Wikidata query and the
-// de-duplication against contacts + scrape_jobs; this only asks and unwraps.
+// Client half of `discover-brands`. The function searches Instagram, separates brands
+// from creators, and de-duplicates against contacts + scrape_jobs; this only asks and
+// unwraps.
 
 export interface DiscoverResult {
+  /** Brands that still need an address found for them. */
   inputs: ScrapeInput[]
-  /** Everything Wikidata knows about after cleaning — the ceiling. */
-  pool: number
-  /** How many of those we have never scraped. */
-  remaining: number
+  /** Contacts written straight from an Instagram bio — these skipped the queue entirely. */
+  savedContacts: number
+  /** Profiles screened to produce this batch. */
+  screened: number
+  /** Searches run — one ScrapeCreators credit each. */
+  searches: number
+  /** Set when discovery fell back to the Wikidata dataset. */
+  note: string
 }
 
 export async function discoverBrands(limit: number): Promise<DiscoverResult> {
@@ -29,10 +35,12 @@ export async function discoverBrands(limit: number): Promise<DiscoverResult> {
           website: c.website,
           country: c.country ?? '',
         })),
-      pool: typeof data?.pool === 'number' ? data.pool : 0,
-      remaining: typeof data?.remaining === 'number' ? data.remaining : 0,
+      savedContacts: typeof data?.savedContacts === 'number' ? data.savedContacts : 0,
+      screened: typeof data?.screened === 'number' ? data.screened : 0,
+      searches: typeof data?.searches === 'number' ? data.searches : 0,
+      note: typeof data?.note === 'string' ? data.note : '',
     }
   } catch (e) {
-    throw new Error(await fnErrorMessage(e, 'Could not reach the brand directory.'))
+    throw new Error(await fnErrorMessage(e, 'Could not reach brand discovery.'))
   }
 }

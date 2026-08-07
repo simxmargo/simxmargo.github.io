@@ -18,24 +18,16 @@ import { useStore } from '@/lib/store'
 import { StatsBar } from '@/components/StatsBar'
 import { FilterBar, type Filters } from '@/components/FilterBar'
 import { ContactsTable } from '@/components/ContactsTable'
-import { ScrapeBrandsModal } from '@/components/admin/ScrapeBrandsModal'
 import { SendQueuePanel } from '@/components/admin/SendQueuePanel'
 import { EmailTemplateEditor } from '@/components/admin/EmailTemplateEditor'
 import { BulkQueueConfirm } from '@/components/admin/BulkQueueConfirm'
 import { ScrapeRunPanel } from '@/components/admin/ScrapeRunPanel'
-import {
-  SCRAPE_BATCH,
-  buildBatch,
-  remainingInDirectory,
-  startScrapeRun,
-  useScrapeRun,
-} from '@/lib/admin/scrapeRun'
+import { SCRAPE_BATCH, buildBatch, startScrapeRun, useScrapeRun } from '@/lib/admin/scrapeRun'
 import { useAdminResource, adminKeys } from '@/lib/admin/queries'
 import { queueForOutreach, SEND_DELAY_MINUTES, type SendQueueRow } from '@/lib/admin/resources/sendQueue'
 import { saveSettings } from '@/lib/admin/resources/settings'
 import type { SendingAccount } from '@/lib/admin/resources/sendingAccount'
 import { buildDraft } from '@/lib/emailTemplate'
-import { normalizeDomain } from '@/lib/brandDirectory'
 import type { SignatureSource } from '@/lib/emailSignature'
 
 const PAGE_SIZE = 10
@@ -63,7 +55,6 @@ export function OutreachPage() {
   // Defaults to NEW: the job on this page is working through untouched leads, and a
   // list that opens on everything buries them under brands already dealt with.
   const [filters, setFilters] = useState<Filters>({ search: '', status: 'new', country: 'all' })
-  const [scraping, setScraping] = useState(false)
   const [pendingId, setPendingId] = useState<string | null>(null)
   const [queueError, setQueueError] = useState('')
   const [page, setPage] = useState(0)
@@ -131,17 +122,9 @@ export function OutreachPage() {
 
   const countries = useMemo(() => Array.from(new Set(contacts.map((c) => c.country))).sort(), [contacts])
 
-  // Lets the brand picker grey out anything already scraped, so you can't spend a run
-  // re-fetching a brand you already have.
-  const existingDomains = useMemo(
-    () => new Set(contacts.map((c) => normalizeDomain(c.website)).filter(Boolean)),
-    [contacts],
-  )
-
   // Scrape state lives in its own store so a run survives switching admin tabs.
   const scrapePhase = useScrapeRun((s) => s.phase)
   const scrapeBusy = scrapePhase === 'scraping' || scrapePhase === 'finishing'
-  const undiscovered = useMemo(() => remainingInDirectory(existingDomains), [existingDomains])
 
   const filtered = useMemo(() => {
     const q = filters.search.toLowerCase()
@@ -288,18 +271,14 @@ export function OutreachPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          {/* One click, no dialog: it takes the next batch of directory brands you
-              haven't got yet and starts. Progress shows in the collapsed row below,
-              and you can keep queueing while it runs. */}
+          {/* One click, no dialog: discovery finds the brands, the server crawls them.
+              Progress shows in the collapsed row below, and you can keep queueing
+              while it runs. */}
           <button
             type="button"
-            onClick={() => void startScrapeRun(() => buildBatch(existingDomains), () => void hydrate())}
+            onClick={() => void startScrapeRun(() => buildBatch(), () => void hydrate())}
             disabled={scrapeBusy}
-            title={
-              undiscovered > 0
-                ? `Scrape the next ${Math.min(SCRAPE_BATCH, undiscovered)} brands from the curated list`
-                : `Curated list exhausted — find ${SCRAPE_BATCH} more brands automatically`
-            }
+            title={`Find ${SCRAPE_BATCH} new brands on Instagram and collect their contact addresses`}
             className="btn btn-primary"
           >
             {scrapeBusy ? (
@@ -311,17 +290,6 @@ export function OutreachPage() {
                 <Plus size={15} aria-hidden="true" /> Scrape new brands
               </>
             )}
-          </button>
-          {/* The directory is a fixed list, so the paste path is the only way to reach a
-              brand that isn't on it. Kept as a secondary control rather than deleted. */}
-          <button
-            type="button"
-            onClick={() => setScraping(true)}
-            className="btn btn-ghost btn-sm"
-            disabled={scrapeBusy}
-            title="Choose brands yourself, or paste your own websites"
-          >
-            Pick manually
           </button>
         </div>
       </header>
@@ -557,13 +525,6 @@ export function OutreachPage() {
         />
       )}
 
-      {scraping && (
-        <ScrapeBrandsModal
-          onClose={() => setScraping(false)}
-          onScraped={() => void hydrate()}
-          existingDomains={existingDomains}
-        />
-      )}
     </>
   )
 }

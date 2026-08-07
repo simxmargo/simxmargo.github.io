@@ -2,8 +2,11 @@
 //
 // Static `fetch()` only (no headless browser — that can't run in Edge Functions).
 // For each brand domain it respects robots.txt, pulls the likely contact pages,
-// extracts + classifies public emails, and upserts them. Sites that yield nothing
-// statically are flagged `needs_browser` for the optional local Playwright worker.
+// extracts + classifies public emails, and upserts them.
+//
+// When a site yields nothing — two thirds of them, almost always a 403/429 wall — it
+// falls back to the Brave search index, which holds the same pages already crawled.
+// Only when that also comes up empty is the job flagged `needs_browser`.
 //
 // Invoke one job (UI "Scrape" button):  POST { "job_id": "<uuid>" }
 // Or drain the pending queue (pg_cron):  POST {}   (no body)
@@ -31,6 +34,7 @@ import {
   sleep,
   USER_AGENT,
 } from '../_shared/scrape.ts'
+import { findBrandEmail } from '../_shared/braveSearch.ts'
 
 // Domains per invocation. Measured at ~18s per site (1.5s politeness delay across 6
 // contact pages, plus timeouts), so 5 is ~90s — comfortably inside the 150s wall-clock
@@ -134,6 +138,14 @@ Deno.serve(async (req) => {
 
   const results: Array<{ job_id: string; brand: string; found: number; status: string; error: string }> = []
 
+  // The search-index fallback costs up to ~3.3s per job on top of a scrape that already
+  // spent its time timing out. Past this mark we stop offering it so a batch of dead
+  // hosts can't push the invocation over the wall-clock budget; those jobs just land on
+  // `needs_browser` as they did before.
+  const startedAt = Date.now()
+  const BRAVE_DEADLINE_MS = 110_000
+  const braveKey = Deno.env.get('BRAVE_API_KEY')?.trim()
+
   for (const job of jobs ?? []) {
     const r = { job_id: job.id, brand: job.brand, found: 0, status: 'done', error: '' }
 
@@ -159,9 +171,17 @@ Deno.serve(async (req) => {
         if (emails.size >= MAX_EMAILS_PER_DOMAIN) break
       }
 
+      // Nothing statically — usually a 403/429 wall rather than a site with no address.
+      // Brave already crawled the very page that just refused us, so ask its index
+      // before giving up. This is the whole reason `needs_browser` was the common case.
+      if (emails.size === 0 && braveKey && Date.now() - startedAt < BRAVE_DEADLINE_MS) {
+        const hit = await findBrandEmail(braveKey, job.brand, domain)
+        if (hit) emails.set(hit.email, hit.sourceUrl || `https://${domain}`)
+      }
+
       if (emails.size === 0) {
-        // Nothing found. Either the site blocked us outright or it genuinely
-        // publishes no address statically — diagnoseEmpty() records which.
+        // Either the site blocked us and the index knew nothing either, or it genuinely
+        // publishes no address — diagnoseEmpty() records which.
         r.status = 'needs_browser'
         r.error = diagnoseEmpty(statuses)
       } else {

@@ -52,24 +52,3 @@ export function StatusBadge({ status, since }: { status: ContactStatus; since?: 
   )
 }
 
-// Small colored chip for the 1-10 AI fit score.
-export function FitChip({ score }: { score: number | null }) {
-  if (score == null) return <span style={{ fontSize: 12, color: 'var(--faint)' }}>—</span>
-  const tone = score >= 8 ? 'pill pill-ok' : score >= 6 ? 'pill pill-accent' : 'pill'
-  return (
-    <span
-      className={tone}
-      style={{
-        display: 'inline-flex',
-        height: 26,
-        width: 26,
-        padding: 0,
-        alignItems: 'center',
-        justifyContent: 'center',
-        fontWeight: 700,
-      }}
-    >
-      {score}
-    </span>
-  )
-}

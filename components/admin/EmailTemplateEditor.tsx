@@ -33,8 +33,6 @@ const SAMPLE: Contact = {
   emailType: 'partnerships',
   country: 'CA',
   website: 'mejuri.com',
-  fitScore: null,
-  fitReason: '',
   status: 'new',
   notes: '',
   lastEmailedAt: null,

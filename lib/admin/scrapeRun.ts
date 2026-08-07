@@ -1,10 +1,8 @@
 'use client'
 
 import { create } from 'zustand'
-import { BRAND_DIRECTORY, normalizeDomain } from '@/lib/brandDirectory'
 import {
   countFoundByWebsite,
-  parseBrandLines,
   queueScrapeJobs,
   readJobStates,
   type ScrapeInput,
@@ -19,18 +17,15 @@ import { discoverBrands } from '@/lib/admin/resources/discoverBrands'
 // promises kept going but their results landed nowhere, so coming back showed an idle
 // button and the work appeared to have vanished.
 //
-// HONEST LIMIT: "background" here means "keeps running while you use the rest of the
-// studio". It does NOT survive closing the tab — the loop is driven from the browser,
-// one Edge Function call per site. The scrape_jobs rows are already inserted though,
-// so a future pg_cron drain (scrape-static accepts POST {} for exactly this) could
-// finish an abandoned run without any change to this file.
+// The run genuinely survives closing the tab: the browser only queues the jobs and
+// watches. pg_cron drains scrape_jobs server-side, so this store drives a readout,
+// not the crawl.
 
 // 100, not 12. The old cap existed because the browser drove the crawl one site at a
 // time — 12 sites measured at ~218 seconds, so 100 would have been a half-hour loop
 // that died with the tab. Now pg_cron drains the queue at 5 sites/minute, so the batch
-// size costs nothing up front and the whole run survives being walked away from.
-// Discovery is nowhere near the limit either: 100 brands takes ~8 Brave searches out
-// of ~1,000 free per month.
+// size costs nothing up front. Discovery is nowhere near its limit either: 100 brands
+// costs ~20 ScrapeCreators credits.
 export const SCRAPE_BATCH = 100
 
 const POLL_MS = 5_000
@@ -67,38 +62,36 @@ export const useScrapeRun = create<ScrapeRunState>((set) => ({
   dismiss: () => set({ items: [], phase: 'idle', notes: [], totalFound: 0, startedAt: null }),
 }))
 
-/** The next N directory brands that aren't already in contacts. */
-export function nextBatch(existingDomains: Set<string>, size = SCRAPE_BATCH): ScrapeInput[] {
-  return BRAND_DIRECTORY.filter((b) => !existingDomains.has(normalizeDomain(b.domain)))
-    .slice(0, size)
-    .flatMap((b) => parseBrandLines(`${b.name}, ${b.domain}`, b.country).inputs)
-}
-
-/** How many directory brands remain unscraped — drives the button's empty state. */
-export function remainingInDirectory(existingDomains: Set<string>): number {
-  return BRAND_DIRECTORY.filter((b) => !existingDomains.has(normalizeDomain(b.domain))).length
-}
-
 export function isRunning(): boolean {
   const p = useScrapeRun.getState().phase
   return p === 'discovering' || p === 'scraping' || p === 'finishing'
 }
 
 /**
- * The next batch to scrape: the curated directory FIRST, topped up from Wikidata.
+ * The next batch to scrape, entirely from live discovery.
  *
- * Curated-first is deliberate — those 64 were chosen because they fit this creator,
- * whereas discovery casts a much wider net and takes what it can get. Only once the
- * good list is exhausted do we reach for the long tail, which is exactly the point at
- * which the button used to go dead.
+ * There is no curated list any more. Those 64 hand-picked domains were mega-brands that
+ * run bot protection and publish no address — they were the bulk of the `needs_browser`
+ * failures — and being consumed FIRST meant every run opened with its worst candidates.
+ *
+ * De-duplication moved server-side with them: discover-brands excludes every domain
+ * already present in contacts or scrape_jobs, so the caller no longer supplies a set.
  */
-export async function buildBatch(existingDomains: Set<string>): Promise<ScrapeInput[]> {
-  const curated = nextBatch(existingDomains)
-  if (curated.length >= SCRAPE_BATCH) return curated
+export async function buildBatch(): Promise<ScrapeInput[]> {
+  const { inputs, savedContacts, note } = await discoverBrands(SCRAPE_BATCH)
 
-  const { inputs } = await discoverBrands(SCRAPE_BATCH - curated.length)
-  const have = new Set(curated.map((c) => c.website))
-  return [...curated, ...inputs.filter((i) => !have.has(i.website))]
+  // Brands whose Instagram bio already carried an address never enter the queue, so
+  // say so — otherwise a run that found ten contacts instantly looks like it found none.
+  const extra: string[] = []
+  if (savedContacts > 0) {
+    extra.push(
+      `${savedContacts} brand${savedContacts === 1 ? '' : 's'} published an address on Instagram — added straight away, no scraping needed.`,
+    )
+  }
+  if (note) extra.push(note)
+  if (extra.length) useScrapeRun.setState((s) => ({ notes: [...s.notes, ...extra] }))
+
+  return inputs
 }
 
 /**
@@ -133,10 +126,15 @@ export async function startScrapeRun(
   }
 
   if (inputs.length === 0) {
-    useScrapeRun.setState({
+    // Nothing to QUEUE is not the same as nothing found — discovery may have written
+    // contacts straight from bios, so keep its notes and still refresh the list.
+    useScrapeRun.setState((s) => ({
       phase: 'done',
-      notes: ['No new brands to scrape — every candidate we know about has already been tried.'],
-    })
+      notes: s.notes.length
+        ? s.notes
+        : ['No new brands found this run — every candidate we know about has already been tried.'],
+    }))
+    onFinished()
     return
   }
 
