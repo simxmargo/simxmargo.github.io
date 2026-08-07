@@ -153,8 +153,27 @@ export function classifyProfile(p: RawProfile): number {
   return score
 }
 
-/** One search. Returns [] on any failure — the caller decides whether to try more. */
-export async function searchProfiles(apiKey: string, query: string): Promise<RawProfile[]> {
+export interface SearchOutcome {
+  profiles: RawProfile[]
+  /** 402 — the credit balance is spent. The caller must switch source, not retry. */
+  outOfCredits: boolean
+  /** Balance reported by the API, so a run can say what it cost. */
+  creditsRemaining: number | null
+}
+
+/**
+ * One search.
+ *
+ * Returns an OUTCOME rather than a bare array because "found nothing" and "we are out
+ * of credits" need opposite responses — retry the next query, versus stop and fall back
+ * to Brave. Collapsing both into `[]` made an exhausted balance look like a quiet niche.
+ */
+export async function searchProfiles(apiKey: string, query: string): Promise<SearchOutcome> {
+  const empty = (outOfCredits = false): SearchOutcome => ({
+    profiles: [],
+    outOfCredits,
+    creditsRemaining: null,
+  })
   try {
     const res = await fetch(
       `${SC_BASE}/v1/instagram/search/profiles?query=${encodeURIComponent(query)}`,
@@ -163,11 +182,16 @@ export async function searchProfiles(apiKey: string, query: string): Promise<Raw
         signal: AbortSignal.timeout(SC_TIMEOUT),
       },
     )
-    if (!res.ok) return []
+    if (res.status === 402) return empty(true)
+    if (!res.ok) return empty()
     const j = await res.json()
-    return Array.isArray(j?.profiles) ? (j.profiles as RawProfile[]) : []
+    return {
+      profiles: Array.isArray(j?.profiles) ? (j.profiles as RawProfile[]) : [],
+      outOfCredits: false,
+      creditsRemaining: typeof j?.credits_remaining === 'number' ? j.credits_remaining : null,
+    }
   } catch {
-    return []
+    return empty()
   }
 }
 

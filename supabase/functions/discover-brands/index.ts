@@ -1,12 +1,14 @@
 // `discover-brands` Edge Function — finds brands to pitch that nobody typed in.
 //
 // SOURCES, in order of preference:
-//   1. INSTAGRAM via ScrapeCreators (if SCRAPECREATORS_API_KEY is set) — the primary
-//      path. A brand's profile carries its own site, its size, and often a contact
-//      address, so one credit returns ten candidates already part-enriched.
-//   2. WIKIDATA (always available, no key) — an open dataset of ~1,100 apparel
-//      companies. Precise but finite; it exists so the button still works with no key
-//      or no credits, matching how the rest of the pipeline degrades.
+//   1. INSTAGRAM via ScrapeCreators — the primary path. A brand's profile carries its
+//      own site, its size, and often a contact address, so one credit returns ten
+//      candidates already part-enriched.
+//   2. BRAVE SEARCH — used when the credit balance is spent (402, or within the
+//      MIN_CREDITS reserve). Unlimited-ish supply, but no bio address and no follower
+//      count, so candidates arrive bare and go through the scraper.
+//   3. WIKIDATA (no key) — an open dataset of ~1,100 apparel companies. Precise but
+//      finite; the last resort so the button is never dead.
 //
 // Nothing here is hardcoded brand data — the only fixed lists are EXCLUSIONS.
 //
@@ -27,6 +29,7 @@ import {
   toCandidate,
   type BrandCandidate,
 } from '../_shared/instagramSearch.ts'
+import { braveDiscover, braveQueryPool } from '../_shared/braveSearch.ts'
 
 const WIKIDATA = 'https://query.wikidata.org/sparql'
 // Wikidata asks bots to identify themselves with a contact route. Do NOT replace this
@@ -76,6 +79,10 @@ async function loadKnownDomains(supabase: SupabaseClient): Promise<Set<string>> 
   return known
 }
 
+// Leave headroom rather than draining to zero: the same key powers `pull-videos` and
+// `fetch-post` for the media kit, and a discovery run must not break those.
+const MIN_CREDITS = 25
+
 async function viaInstagram(apiKey: string, known: Set<string>, limit: number) {
   const pool = queryPool()
   // Start somewhere random so consecutive runs explore different niches rather than
@@ -85,14 +92,28 @@ async function viaInstagram(apiKey: string, known: Set<string>, limit: number) {
   const fresh = new Map<string, BrandCandidate>()
   const used: string[] = []
   let screened = 0
+  let outOfCredits = false
+  let creditsRemaining: number | null = null
 
   for (let i = 0; i < pool.length && fresh.size < limit && used.length < MAX_SEARCHES; i++) {
     const query = pool[(start + i) % pool.length]
-    const profiles = await searchProfiles(apiKey, query)
-    used.push(query)
-    screened += profiles.length
+    const outcome = await searchProfiles(apiKey, query)
 
-    for (const p of profiles) {
+    if (outcome.outOfCredits) {
+      outOfCredits = true
+      break
+    }
+    if (outcome.creditsRemaining !== null) {
+      creditsRemaining = outcome.creditsRemaining
+      if (creditsRemaining <= MIN_CREDITS) {
+        outOfCredits = true // treat "nearly out" as out, so the reserve survives
+        break
+      }
+    }
+
+    used.push(query)
+    screened += outcome.profiles.length
+    for (const p of outcome.profiles) {
       if (fresh.size >= limit) break
       const c = toCandidate(p)
       if (!c) continue // a creator, or no own site to pitch
@@ -108,7 +129,39 @@ async function viaInstagram(apiKey: string, known: Set<string>, limit: number) {
     searches: used.length,
     screened,
     queries: used,
+    creditsRemaining,
+    outOfCredits,
     source: 'instagram' as const,
+  }
+}
+
+/** Brand discovery from the web index. The fallback when Instagram credits run out. */
+async function viaBrave(apiKey: string, known: Set<string>, limit: number) {
+  const pool = braveQueryPool()
+  const start = Math.floor(Math.random() * pool.length)
+
+  const fresh = new Map<string, BrandCandidate>()
+  const used: string[] = []
+
+  for (let i = 0; i < pool.length && fresh.size < limit && used.length < MAX_SEARCHES; i++) {
+    if (i > 0) await new Promise((r) => setTimeout(r, 1100)) // free plan is ~1 req/sec
+    const query = pool[(start + i) % pool.length]
+    // Page deeper as we go so repeated runs reach past the first page of results.
+    const hits = await braveDiscover(apiKey, query, i % 4)
+    used.push(query)
+    for (const h of hits) {
+      if (fresh.size >= limit) break
+      if (known.has(h.website) || fresh.has(h.website)) continue
+      fresh.set(h.website, h)
+    }
+  }
+
+  return {
+    candidates: [...fresh.values()],
+    searches: used.length,
+    screened: 0,
+    queries: used,
+    source: 'brave' as const,
   }
 }
 
@@ -199,20 +252,50 @@ Deno.serve(async (req) => {
 
   const known = await loadKnownDomains(supabase)
   const scKey = Deno.env.get('SCRAPECREATORS_API_KEY')?.trim()
+  const braveKey = Deno.env.get('BRAVE_API_KEY')?.trim()
 
+  // Reply with the candidates that still need scraping, having first written the ones
+  // whose address we already have.
+  const reply = async (out: Record<string, unknown> & { candidates: BrandCandidate[] }, note = '') => {
+    const { saved, rest, saveError } = await saveReadyContacts(supabase, out.candidates)
+    return json({ ...out, candidates: rest, savedContacts: saved, saveError, note: note || undefined })
+  }
+
+  // 1. Instagram, while there are credits for it.
   if (scKey) {
     const out = await viaInstagram(scKey, known, limit)
-    if (out.candidates.length > 0) {
-      const { saved, rest, saveError } = await saveReadyContacts(supabase, out.candidates)
-      return json({ ...out, candidates: rest, savedContacts: saved, saveError })
+    if (out.candidates.length > 0 && !out.outOfCredits) return reply(out)
+
+    // 2. Out of credits (or it found nothing) → the web index.
+    if (braveKey) {
+      const brave = await viaBrave(braveKey, known, limit)
+      const why = out.outOfCredits
+        ? `ScrapeCreators credits are spent${out.creditsRemaining !== null ? ` (${out.creditsRemaining} left, reserve is ${MIN_CREDITS})` : ''} — discovered via Brave search instead.`
+        : 'Instagram search returned nothing this run — discovered via Brave search instead.'
+      // Anything Instagram did manage to find before stopping still counts.
+      if (out.candidates.length > 0) {
+        const merged = [...out.candidates]
+        const have = new Set(merged.map((c) => c.website))
+        for (const c of brave.candidates) if (!have.has(c.website)) merged.push(c)
+        return reply({ ...brave, candidates: merged.slice(0, limit) }, why)
+      }
+      if (brave.candidates.length > 0) return reply(brave, why)
     }
-    // A key that returns nothing (credits spent, outage) must not leave the button
-    // dead — fall through to the dataset rather than reporting failure.
+
+    // 3. Neither search source produced anything → the offline dataset.
     const fallback = await viaWikidata(known, limit)
-    return json({ ...fallback, note: 'Instagram search returned nothing this run — used Wikidata instead.' })
+    if ('error' in fallback) return json({ ...fallback, candidates: [] }, 502)
+    return reply(fallback, 'Both search sources came up empty — used the Wikidata dataset.')
+  }
+
+  if (braveKey) {
+    const brave = await viaBrave(braveKey, known, limit)
+    if (brave.candidates.length > 0) {
+      return reply(brave, 'Set SCRAPECREATORS_API_KEY for Instagram discovery; used Brave search.')
+    }
   }
 
   const out = await viaWikidata(known, limit)
   if ('error' in out) return json({ ...out, candidates: [] }, 502)
-  return json({ ...out, note: 'Set SCRAPECREATORS_API_KEY for open-ended discovery; using the Wikidata dataset.' })
+  return reply(out, 'No search key configured; using the Wikidata dataset.')
 })
