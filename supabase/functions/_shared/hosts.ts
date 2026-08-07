@@ -39,6 +39,8 @@ export const LINK_AGGREGATORS = [
   'likeshop.me', 'liketoknow.it', 'ltk.app', 'shopmy.us', 'snipfeed.co', 'koji.to',
   'withkoji.com', 'hoo.be', 'tap.bio', 'msha.ke', 'flow.page', 'sleek.bio',
   'lnk.to', 'linkr.bio', 'pixelfy.me', 'geni.us', 'bit.ly', 'tinyurl.com',
+  // app / mini-site builders that host a brand's page on their own domain
+  'appbrew.link', 'page.link', 'app.link', 'onelink.me', 'smart.link',
 ]
 
 export function isLinkAggregator(host: string): boolean {

@@ -171,6 +171,32 @@ export async function searchProfiles(apiKey: string, query: string): Promise<Raw
   }
 }
 
+// Emoji, dingbats and arrows. Instagram display names use these as decoration AND as
+// separators ("FJ SWIM 👙 Handmade Bikinis"), so they are cut points, not noise to strip.
+const EMOJI =
+  /[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\u{2190}-\u{21FF}\u{2B00}-\u{2BFF}\u{FE0F}\u{20E3}]/u
+
+/**
+ * The display name, reduced to something that can follow "Hi " in an email.
+ *
+ * NFKC first: Instagram vanity fonts are mathematical-alphanumeric codepoints, so
+ * "𝘴𝘮𝘢𝘭𝘭" is not the word "small" until it is normalized. Then cut at the first
+ * separator — a bar, a slash or an emoji — since everything after it is a tagline.
+ */
+export function cleanBrandName(raw: string): string {
+  // Strip the marks BEFORE normalizing — NFKC expands ™ into the letters "TM", which
+  // would otherwise survive into the greeting as "The Bikini Shoppe TM".
+  const marks = (raw ?? '').replace(/[®™©]/g, ' ')
+  const cut = marks.normalize('NFKC').split(/[|｜–—•·/]|\s[-–]\s/)[0]
+  return cut
+    .split(EMOJI)[0]
+    .replace(/\s{2,}/g, ' ')
+    .trim()
+    .replace(/\s+official$/i, '')
+    .replace(/[,:;\-–—|]+$/, '')
+    .trim()
+}
+
 /** A brand-shaped candidate from a raw profile, or null if it reads as a creator. */
 export function toCandidate(p: RawProfile): BrandCandidate | null {
   if (classifyProfile(p) < 2) return null
@@ -178,13 +204,10 @@ export function toCandidate(p: RawProfile): BrandCandidate | null {
   if (!website) return null
 
   // Prefer the profile's own name; fall back to the domain when it is a person's name
-  // or a tagline (same guard the web-search path uses).
+  // or a tagline, since the domain at least cannot be a sentence.
   const label = domainLabel(website)
   const fromDomain = label.replace(/[-_]/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
-  // Split on '/' as well as the usual bars: "Wituka / Sustainable Fashion" would
-  // otherwise pass the echo check (the tagline contains the name) and go out in the
-  // greeting whole.
-  const full = (p.full_name ?? '').split(/[|｜–—•·/]/)[0].trim()
+  const full = cleanBrandName(p.full_name ?? '')
   const usable = full && full.length <= 40 && full.split(/\s+/).length <= 5
   const echoes = usable && (squash(full).includes(squash(label)) || squash(label).includes(squash(full)))
 
