@@ -11,11 +11,26 @@
 // Invoke one job (UI "Scrape" button):  POST { "job_id": "<uuid>" }
 // Or drain the pending queue (pg_cron):  POST {}   (no body)
 //
-// Auth: admin-only (is_admin() gate). The UI path carries the signed-in admin's JWT.
-// A future pg_cron drain must present admin credentials (or add a CRON_SECRET branch
-// here) — an unauthenticated cron tick will now 401, by design.
+// Auth: two callers, two credentials — the studio presents the signed-in admin's JWT,
+// the pg_cron drain presents CRON_SECRET in `x-cron-secret` (see the handler).
 //
-// Deploy:  supabase functions deploy scrape-static
+// ── DEPLOY WITH --no-verify-jwt. THIS IS LOAD-BEARING. ──────────────────────────
+// `verify_jwt` is PLATFORM config, applied at the gateway BEFORE this file runs. With
+// it on, a pg_cron tick — which carries no Authorization header — is rejected with
+// `{"code":"UNAUTHORIZED_NO_AUTH_HEADER"}` and the function never boots, so the
+// cron-secret branch below is unreachable no matter what it says. That is exactly what
+// happened: from 2026-08-07 to 2026-08-09 every one of the once-a-minute drain ticks
+// 401'd, ~1,400 of them, and queued brands were never scraped. `drain-queue` has always
+// been deployed with the flag and has always worked; this one was not.
+//
+// Turning verification off does NOT make the function public — it moves the check from
+// the gateway into the handler, where it is strictly stronger (the gateway accepts the
+// anon key, which ships in the browser bundle; the handler requires the cron secret or
+// a real admin).
+//
+//   ./node_modules/.bin/supabase functions deploy scrape-static \
+//     --project-ref zzgypushqcpchfxrjexc --use-api --no-verify-jwt
+//
 // Env (auto-injected by Supabase): SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY
 //
 // Design rationale: docs/BACKEND_DESIGN.md §3.
@@ -25,8 +40,7 @@ import { json, preflight } from '../_shared/http.ts'
 import { requireAdmin } from '../_shared/auth.ts'
 import {
   CONTACT_PATHS,
-  classifyEmail,
-  extractEmails,
+  extractEmailHits,
   isPathAllowed,
   normalizeDomain,
   pageUrl,
@@ -34,8 +48,13 @@ import {
   sleep,
   USER_AGENT,
 } from '../_shared/scrape.ts'
-import { findBrandEmail } from '../_shared/braveSearch.ts'
+import { findBrandEmails } from '../_shared/braveSearch.ts'
 import { emailBelongsToBrand } from '../_shared/hosts.ts'
+import {
+  pickBestEmail,
+  toStoredAlternates,
+  type EmailCandidate,
+} from '../../../lib/outreach/pickEmail.ts'
 
 // Domains per invocation. Measured at ~18s per site (1.5s politeness delay across 6
 // contact pages, plus timeouts), so 5 is ~90s — comfortably inside the 150s wall-clock
@@ -139,10 +158,10 @@ Deno.serve(async (req) => {
 
   const results: Array<{ job_id: string; brand: string; found: number; status: string; error: string }> = []
 
-  // The search-index fallback costs up to ~3.3s per job on top of a scrape that already
-  // spent its time timing out. Past this mark we stop offering it so a batch of dead
-  // hosts can't push the invocation over the wall-clock budget; those jobs just land on
-  // `needs_browser` as they did before.
+  // Brave enrichment costs ~1.1-3.3s per job — usually one query answers, and the pacing
+  // delay only applies BETWEEN phrasings. Past this mark we stop offering it so a batch
+  // of slow hosts can't push the invocation over the wall-clock budget; those jobs still
+  // keep whatever their own site published, just unenriched.
   const startedAt = Date.now()
   const BRAVE_DEADLINE_MS = 110_000
   const braveKey = Deno.env.get('BRAVE_API_KEY')?.trim()
@@ -158,7 +177,11 @@ Deno.serve(async (req) => {
       const robots = await fetchText(`https://${domain}/robots.txt`)
       const disallowed = robots.html ? parseDisallowed(robots.html) : []
 
-      const emails = new Map<string, string>() // email -> first source_url it appeared on
+      // Every address the site publishes, with provenance. ALL of them are collected —
+      // the choice of which one to write happens once, at the end, with the full set in
+      // hand. Deciding page-by-page would mean committing to `hello@` off the homepage
+      // before ever reading `/press`.
+      const found = new Map<string, EmailCandidate>()
       const statuses: Array<number | string> = [] // per-page outcome, for diagnoseEmpty()
       for (const [i, path] of CONTACT_PATHS.entries()) {
         if (!isPathAllowed(path, disallowed)) continue
@@ -166,50 +189,119 @@ Deno.serve(async (req) => {
         const { html, code } = await fetchText(pageUrl(domain, path))
         statuses.push(code)
         if (!html) continue
-        for (const e of extractEmails(html)) {
+        const isContactPage = path !== '/'
+        for (const hit of extractEmailHits(html)) {
           // A brand's page carries other people's addresses: @font-face licence headers
           // (manhattan-denim.com yielded four type designers and no real contact),
           // embedded Shopify app widgets, agency credits. Shape filtering cannot tell
           // those apart from the brand's own — only ownership can.
-          if (!emailBelongsToBrand(e, domain, job.brand)) continue
-          if (!emails.has(e)) emails.set(e, pageUrl(domain, path))
+          if (!emailBelongsToBrand(hit.email, domain, job.brand)) continue
+          const prev = found.get(hit.email)
+          if (!prev) {
+            found.set(hit.email, {
+              email: hit.email,
+              via: hit.via,
+              sourceUrl: pageUrl(domain, path),
+              pageHits: 1,
+              onContactPage: isContactPage,
+            })
+            continue
+          }
+          // Seen again on another page: that repetition is itself a liveness signal, and
+          // a later `mailto:` upgrades a hit first seen in a script blob.
+          prev.pageHits = (prev.pageHits ?? 1) + 1
+          if (hit.via === 'mailto' && prev.via !== 'mailto') {
+            prev.via = 'mailto'
+            prev.sourceUrl = pageUrl(domain, path)
+          }
+          if (isContactPage) prev.onContactPage = true
         }
-        if (emails.size >= MAX_EMAILS_PER_DOMAIN) break
+        if (found.size >= MAX_EMAILS_PER_DOMAIN) break
       }
 
-      // Nothing statically — usually a 403/429 wall rather than a site with no address.
-      // Brave already crawled the very page that just refused us, so ask its index
-      // before giving up. This is the whole reason `needs_browser` was the common case.
-      if (emails.size === 0 && braveKey && Date.now() - startedAt < BRAVE_DEADLINE_MS) {
-        const hit = await findBrandEmail(braveKey, job.brand, domain)
-        if (hit) emails.set(hit.email, hit.sourceUrl || `https://${domain}`)
+      // ── Brave enrichment ────────────────────────────────────────────────────────
+      //
+      // ALWAYS, not only when the crawl came back empty. Brave is an ENHANCEMENT on top
+      // of the site scrape, not a rescue for it: the index has pages our six-path crawl
+      // never reaches — press releases, stockist directories, partner listings, a
+      // /collaborations page linked from nowhere obvious. A brand whose homepage shows
+      // `support@` used to be written off with `support@` even when `press@` was one
+      // search away. Both sources feed ONE ranking below.
+      //
+      // It still rescues the empty case — two thirds of jobs came back `needs_browser`
+      // because the origin answered 403/429, and Brave already crawled those same pages.
+      // That is now a consequence of running it, not the reason for running it.
+      const enrich =
+        braveKey &&
+        Date.now() - startedAt < BRAVE_DEADLINE_MS &&
+        // The one skip: the crawl already produced a collaborations-tier address on the
+        // brand's own domain (62 + 10 = 72). Nothing Brave returns can outrank that, and
+        // the free plan is ~2,000 queries a month — worth not spending on a settled
+        // answer. Anything less, including a press desk, still gets enriched, because
+        // `partnerships@` may well be sitting in the index.
+        (pickBestEmail([...found.values()], job.website, job.brand).winner?.score ?? 0) < 70
+
+      if (enrich) {
+        for (const hit of await findBrandEmails(braveKey!, job.brand, domain)) {
+          const prev = found.get(hit.email)
+          if (prev) {
+            // The crawl already had it. Seeing it indexed elsewhere too is corroboration,
+            // but must not overwrite a `mailto:` provenance with the weaker 'search'.
+            prev.pageHits = (prev.pageHits ?? 1) + 1
+            continue
+          }
+          found.set(hit.email, {
+            email: hit.email,
+            via: 'search',
+            sourceUrl: hit.sourceUrl || `https://${domain}`,
+            pageHits: 1,
+          })
+        }
       }
 
-      if (emails.size === 0) {
-        // Either the site blocked us and the index knew nothing either, or it genuinely
-        // publishes no address — diagnoseEmpty() records which.
+      // ONE ROW PER COMPANY. The site can publish twenty addresses — meandem.com
+      // publishes one per retail store — and writing all of them meant the table filled
+      // with rows that existed only to be archived by the post-send sweep. The ranker
+      // picks the desk most likely to read a creator pitch and still answer; the rest
+      // ride along on the winner as `alternates`, so a bounce can be recovered by
+      // promoting a runner-up instead of re-crawling the site.
+      const pick = pickBestEmail([...found.values()], job.website, job.brand)
+
+      if (!pick.winner) {
+        // Either the site blocked us and the index knew nothing either, it genuinely
+        // publishes no address, or everything it published belonged to somebody else.
         r.status = 'needs_browser'
-        r.error = diagnoseEmpty(statuses)
+        r.error = pick.rejected.length
+          ? `Found ${pick.rejected.length} address(es), none usable: ${pick.rejected
+              .map((x) => `${x.email} (${x.reason})`)
+              .join('; ')}`
+          : diagnoseEmpty(statuses)
       } else {
-        const rows = [...emails].slice(0, MAX_EMAILS_PER_DOMAIN).map(([email, src]) => ({
+        const w = pick.winner
+        const row = {
           brand: job.brand,
-          email,
-          email_type: classifyEmail(email),
+          email: w.email,
+          email_type: w.type,
           country: job.country ?? '',
           website: job.website,
-          source_url: src,
+          source_url: w.sourceUrl,
+          confidence: w.score,
+          alternates: toStoredAlternates(pick.alternates),
           status: 'new',
-        }))
-        // ignoreDuplicates: never clobber a row that enrichment/scoring/sending
-        // has already touched. `.select()` returns only the rows actually inserted,
-        // so `found` counts genuinely new contacts.
+        }
+        // ignoreDuplicates: never clobber a row that scoring or sending has already
+        // touched. `.select()` returns only rows actually inserted, so `found` counts
+        // genuinely new contacts.
         const { data: inserted, error: upErr } = await supabase
           .from('contacts')
-          .upsert(rows, { onConflict: 'email', ignoreDuplicates: true })
+          .upsert([row], { onConflict: 'email', ignoreDuplicates: true })
           .select('id')
         if (upErr) throw new Error(upErr.message)
         r.found = inserted?.length ?? 0
         r.status = 'done'
+        // Deliberately no note on the success path: `r.error` lands in
+        // `scrape_jobs.error`, which the run panel renders as a failure. What was kept
+        // and what was held in reserve is on the contact row itself.
       }
     } catch (err) {
       r.status = 'error'

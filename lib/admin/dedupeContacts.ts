@@ -1,43 +1,17 @@
 import type { Contact } from '@/lib/types'
+import { scoreEmail } from '@/lib/outreach/pickEmail'
 
 // One contact per company, for bulk queueing.
 //
-// A brand's contact page routinely yields several addresses — meandem.com produced 21,
-// one per store location — and queueing all of them means pitching the same company
-// twenty-one times. sendPitch already refuses the second send, but only after the rows
-// are queued, so the admin sees "Queue 10" and gets a pile of 409s. This picks the one
-// address worth writing to and reports the rest as skipped.
-
-const TYPE_RANK: Record<string, number> = {
-  partnerships: 0,
-  press: 1,
-  generic: 2,
-  named: 3,
-}
-
-const squash = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '')
-
-/**
- * Does the address look like it belongs to the site, rather than to a third party
- * whose address happened to be on the page (a font licence, an embedded app widget)?
- *
- * This ranks ONLY — the authoritative guard runs server-side in `_shared/hosts.ts`
- * before a contact is ever written. Kept deliberately small so the two cannot drift
- * in a way that matters: the worst case here is picking a slightly worse address.
- */
-export function looksOwned(contact: Contact): boolean {
-  const domain = (contact.email.split('@')[1] ?? '').toLowerCase()
-  const site = (contact.website ?? '').toLowerCase().replace(/^www\./, '')
-  if (!domain || !site) return false
-  if (domain === site || domain.endsWith(`.${site}`) || site.endsWith(`.${domain}`)) return true
-
-  const siteLabel = squash(site.split('.')[0])
-  const mailLabel = squash(domain.split('.')[0])
-  const local = squash(contact.email.split('@')[0] ?? '')
-  if (siteLabel.length < 4) return false
-  if (local.length >= 4 && local.includes(siteLabel)) return true
-  return mailLabel.length >= 4 && (siteLabel.includes(mailLabel) || mailLabel.includes(siteLabel))
-}
+// THIS IS NOW A SAFETY NET, NOT THE MAIN EVENT. The scraper writes a single ranked row
+// per company (see lib/outreach/pickEmail.ts), so a freshly scraped table has nothing
+// here to collapse. What it still catches: rows scraped before that change, rows added
+// by hand, and companies reachable at two different websites.
+//
+// It used to carry its OWN ownership test and its own type ranking — a second, subtly
+// different definition of "best address" living twenty lines from the one the scraper
+// used. Both now call the same scorer, so the address the table shows as best is the
+// address the sender would have chosen.
 
 /** Companies are keyed on the stored website, which discovery already normalized. */
 function companyKey(c: Contact): string {
@@ -45,12 +19,17 @@ function companyKey(c: Contact): string {
 }
 
 /**
- * Lower sorts first. Ownership OUTRANKS the partnerships label deliberately: without
- * that, rankandstyle.com would pick `partnerships@dear-francis.com` — a stranger's
- * address that merely happens to say "partnerships".
+ * Score a stored row.
+ *
+ * Prefers the `confidence` the scraper computed with full provenance in hand — it knew
+ * whether the address came from a `mailto:` href and how many pages carried it, and
+ * none of that survives into the contacts row. Recomputing is the fallback for rows
+ * written before scoring existed, and is necessarily blinder: `via: 'body'` is the
+ * neutral assumption, so a recomputed score is a floor, never an inflation.
  */
-function rank(c: Contact): [number, number, string] {
-  return [looksOwned(c) ? 0 : 1, TYPE_RANK[c.emailType] ?? 9, c.createdAt ?? '']
+function scoreOf(c: Contact): number {
+  if (typeof c.confidence === 'number' && c.confidence > 0) return c.confidence
+  return scoreEmail({ email: c.email, via: 'body' }, c.website ?? '', c.brand).score
 }
 
 export interface DedupeResult {
@@ -67,20 +46,24 @@ export interface DedupeResult {
  * the confirm dialog lists them the way the table did.
  */
 export function oneContactPerCompany(contacts: Contact[]): DedupeResult {
-  const best = new Map<string, Contact>()
+  const best = new Map<string, { contact: Contact; score: number }>()
   for (const c of contacts) {
     const key = companyKey(c)
     const held = best.get(key)
+    const score = scoreOf(c)
     if (!held) {
-      best.set(key, c)
+      best.set(key, { contact: c, score })
       continue
     }
-    const [a1, a2, a3] = rank(c)
-    const [b1, b2, b3] = rank(held)
-    if (a1 < b1 || (a1 === b1 && (a2 < b2 || (a2 === b2 && a3 < b3)))) best.set(key, c)
+    // Ties break on creation order, so repeated runs over the same table always queue
+    // the same address rather than shuffling with Map iteration.
+    const better =
+      score > held.score ||
+      (score === held.score && (c.createdAt ?? '') < (held.contact.createdAt ?? ''))
+    if (better) best.set(key, { contact: c, score })
   }
 
-  const winners = new Set([...best.values()].map((c) => c.id))
+  const winners = new Set([...best.values()].map((b) => b.contact.id))
   return {
     picked: contacts.filter((c) => winners.has(c.id)),
     skipped: contacts.filter((c) => !winners.has(c.id)),

@@ -12,6 +12,13 @@ export type ContactStatus =
 
 export type EmailType = 'partnerships' | 'press' | 'generic' | 'named'
 
+/** A runner-up address for the same company, held in case the chosen one bounces. */
+export interface ContactAlternate {
+  email: string
+  type: EmailType
+  score: number
+}
+
 export interface Contact {
   id: string
   brand: string
@@ -23,6 +30,13 @@ export interface Contact {
   notes: string
   lastEmailedAt: string | null
   createdAt: string
+  /**
+   * Address quality, 0-100, from `lib/outreach/pickEmail.ts` — role intent plus
+   * publication signals. Null on rows written before ranking existed.
+   */
+  confidence: number | null
+  /** Other addresses found for this company, best first. Empty for most rows. */
+  alternates: ContactAlternate[]
 }
 
 // Drives the email template merge-fields. Edited in Settings.

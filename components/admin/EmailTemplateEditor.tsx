@@ -37,6 +37,8 @@ const SAMPLE: Contact = {
   notes: '',
   lastEmailedAt: null,
   createdAt: '',
+  confidence: null,
+  alternates: [],
 }
 
 interface ProfileShape {

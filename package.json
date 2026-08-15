@@ -16,7 +16,8 @@
     "db:list": "node scripts/sb.mjs migration list --linked",
     "gen:types": "node scripts/sb.mjs gen types typescript --project-id zzgypushqcpchfxrjexc",
     "gen:og": "node scripts/gen-og.mjs",
-    "backup": "node scripts/backup.mjs"
+    "backup": "node scripts/backup.mjs",
+    "dedupe:contacts": "node scripts/dedupe-contacts.mjs"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",

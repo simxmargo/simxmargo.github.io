@@ -18,8 +18,11 @@ export const CONTACT_PATHS = [
   '/about',
 ] as const
 
-// Mirrors the `contacts.email_type` check constraint in 0001_init.sql.
-export type EmailType = 'partnerships' | 'press' | 'generic' | 'named'
+// Classification lives in the shared ranker so the `email_type` column and the address
+// ranking can never disagree about what a mailbox IS. Re-exported here because three
+// call sites already import it from this module.
+export { classifyEmail, type EmailType } from '../../../lib/outreach/pickEmail.ts'
+import { mailableReason } from '../../../lib/outreach/pickEmail.ts'
 
 export const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
 
@@ -114,6 +117,12 @@ export function isLikelyContactEmail(email: string): boolean {
   if (at < 1) return false
   if (JUNK_DOMAINS.has(e.slice(at + 1))) return false
   if (/^[0-9a-f]{16,}$/.test(e.slice(0, at))) return false // Sentry/Raygun hash keys
+  // The send-gate's rules, applied here too. This filter is the EXTRACTION gate and is
+  // deliberately looser overall, but the checks that catch scraping debris — an
+  // unrecognised TLD (`…@hearst.comif`, from "…hearst.com if you…"), markup fused to
+  // the local part (`nbspsupport@`, `u003ehello@`) — belong at both gates: there is no
+  // value in storing a row that the sender will refuse anyway.
+  if (mailableReason(e) !== '') return false
   return true
 }
 
@@ -146,37 +155,44 @@ function decodeSource(html: string): string {
     .replace(/&amp;/gi, '&')
 }
 
+/** An address plus HOW it was published — `mailto:` is a deliberate act, a body match isn't. */
+export interface ExtractedEmail {
+  email: string
+  via: 'mailto' | 'body'
+}
+
 // Pull emails from `mailto:` links first (highest-signal), then a regex pass over the
-// page. Returns a deduped, lowercased, filtered list.
-export function extractEmails(html: string): string[] {
+// page. Returns deduped, lowercased, filtered hits, each carrying its provenance.
+//
+// Provenance is kept because it is one of the few honest liveness signals available
+// without a verification API: somebody wrote `<a href="mailto:…">` on purpose and a
+// visitor clicking it would reach a human. The same address matched inside a minified
+// script blob might be a leftover in a config object nobody has read since 2019. The
+// ranker weights the two differently; collapsing them to a bare string threw that away.
+export function extractEmailHits(html: string): ExtractedEmail[] {
   const source = decodeSource(html)
-  const found = new Set<string>()
+  const found = new Map<string, ExtractedEmail['via']>()
   // `\\` added to the exclusion set: a JSON-escaped href would otherwise pull the
   // backslash into the address.
   for (const m of source.matchAll(/mailto:([^"'?>\s\\]+)/gi)) {
     const e = cleanMailto(m[1])
-    if (isLikelyContactEmail(e)) found.add(e)
+    if (isLikelyContactEmail(e)) found.set(e, 'mailto')
   }
   for (const m of source.matchAll(EMAIL_RE)) {
     const e = m[0].toLowerCase()
-    if (isLikelyContactEmail(e)) found.add(e)
+    // Never downgrade: an address already seen in an href stays 'mailto'.
+    if (isLikelyContactEmail(e) && !found.has(e)) found.set(e, 'body')
   }
-  return [...found]
+  return [...found].map(([email, via]) => ({ email, via }))
 }
 
-const PRESS_RE = /^(press|pr|media|publicity|news)/
-const PARTNER_RE = /(partner|collab|influenc|creator|ambassador|wholesale|affiliat|marketing|brand)/
-const GENERIC_RE =
-  /^(info|hello|hi|hey|contact|support|team|sales|admin|enquir|inquir|help|customer|care|office|general|shop|service|order)/
-
-// Map an address to an outreach category from its local part. Order matters:
-// a press/partnership role beats the generic bucket; a `first.last@` pattern is
-// the only thing we'll confidently call a named individual.
-export function classifyEmail(email: string): EmailType {
-  const local = email.slice(0, email.indexOf('@')).toLowerCase()
-  if (PRESS_RE.test(local)) return 'press'
-  if (PARTNER_RE.test(local)) return 'partnerships'
-  if (GENERIC_RE.test(local)) return 'generic'
-  if (/^[a-z]+[._][a-z]+/.test(local)) return 'named' // first.last / first_last
-  return 'generic'
+/** Addresses only. Kept for callers that don't care where an address came from. */
+export function extractEmails(html: string): string[] {
+  return extractEmailHits(html).map((h) => h.email)
 }
+
+// classifyEmail moved to lib/outreach/pickEmail.ts (re-exported at the top of this
+// file). The copy that lived here anchored press as `^(press|pr|…)` with no token
+// boundary, so `privacy@`, `promo@` and `pricing@` all classified as PRESS — which not
+// only mislabelled them, it PROMOTED them, since press outranks generic when choosing
+// who to pitch. The shared version requires `pr` to be a whole token.

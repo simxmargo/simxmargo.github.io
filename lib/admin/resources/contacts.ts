@@ -15,8 +15,10 @@ import type { Contact, ContactStatus } from '@/lib/types'
 // output, which is structurally the shared Contact type the store/UI already consume.
 export type ContactRow = Contact
 
-// Mirrors the route's STATUSES whitelist (the contacts.status CHECK values).
-const STATUSES = ['new', 'queued', 'sent', 'replied', 'bounced', 'skip'] as const
+// Mirrors the contacts.status CHECK values. 'inbound' arrived in migration 0014 and was
+// missing here, so setting a lead to "they contacted us first" failed client-side with
+// a validation error that never reached the database.
+const STATUSES = ['new', 'inbound', 'queued', 'sent', 'replied', 'bounced', 'skip'] as const
 
 // Map a snake_case contacts row → camelCase. Mirrors the route's mapContact exactly.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -32,6 +34,10 @@ function mapContact(r: any): ContactRow {
     notes: r.notes ?? '',
     lastEmailedAt: r.last_emailed_at ?? null,
     createdAt: r.created_at,
+    confidence: typeof r.confidence === 'number' ? r.confidence : null,
+    // Defensive despite the jsonb array CHECK in 0016: this runs in the browser, and a
+    // non-array here would take the whole contacts table down at render.
+    alternates: Array.isArray(r.alternates) ? r.alternates : [],
   }
 }
 

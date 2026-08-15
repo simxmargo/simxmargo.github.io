@@ -11,6 +11,12 @@
     "jsx": "react-jsx",
     "strict": true,
     "noEmit": true,
+    // `lib/outreach/*` is imported by FOUR runtimes: the Next bundle, Deno Edge
+    // Functions, Node scripts (type-stripping), and tsc here. Deno and Node both
+    // require the explicit `.ts` extension; only tsc objects to it. Allowing it is what
+    // lets one file serve all four instead of maintaining per-runtime copies.
+    // Safe under noEmit — nothing is written, so no extension is ever wrong on disk.
+    "allowImportingTsExtensions": true,
     "esModuleInterop": true,
     "resolveJsonModule": true,
     "isolatedModules": true,
