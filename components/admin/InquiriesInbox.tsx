@@ -301,7 +301,7 @@ export function InquiriesInbox() {
                     }}
                     className={`seg-btn${active ? ' active' : ''}`}
                   >
-                    <Icon size={14} aria-hidden="true" style={{ verticalAlign: '-2px', marginRight: 7 }} />
+                    <Icon size={14} aria-hidden="true" />
                     {label}
                     {badge > 0 && (
                       <span className={`seg-count${key === 'inbox' ? ' is-unread' : ''}`}>{badge}</span>
