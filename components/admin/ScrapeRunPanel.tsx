@@ -45,12 +45,16 @@ function pillFor(item: ScrapeRunItem) {
 }
 
 export function ScrapeRunPanel() {
-  const { items, phase, notes, totalFound, dismiss } = useScrapeRun()
+  const { items, phase, notes, totalFound, failed, dismiss } = useScrapeRun()
   const [open, setOpen] = useState(false)
 
   // Rendered from the moment a run starts, BEFORE any items exist — discovery takes a
   // second or two and a button that looks dead for that long reads as broken.
   if (phase === 'idle') return null
+
+  // A failed run opens itself. The reason lives in `notes`, and leaving it collapsed
+  // behind a "Nothing to scrape" line is how a 504 went unnoticed for a day.
+  const expanded = open || failed
 
   const finished = items.filter((i) => i.status !== 'waiting' && i.status !== 'scraping').length
   const current = items.find((i) => i.status === 'scraping')
@@ -63,9 +67,11 @@ export function ScrapeRunPanel() {
         ? 'Enriching and scoring…'
         : running
           ? `Scraping ${Math.min(finished + 1, items.length)} of ${items.length}${current ? ` · ${current.brand}` : ''}`
-          : items.length === 0
-            ? 'Nothing to scrape'
-            : `Found ${totalFound} contact${totalFound === 1 ? '' : 's'} across ${items.length} site${items.length === 1 ? '' : 's'}`
+          : failed
+            ? "Couldn't find brands to scrape"
+            : items.length === 0
+              ? 'Nothing to scrape'
+              : `Found ${totalFound} contact${totalFound === 1 ? '' : 's'} across ${items.length} site${items.length === 1 ? '' : 's'}`
 
   return (
     <section className="scrape-run" aria-live="polite">
@@ -74,13 +80,15 @@ export function ScrapeRunPanel() {
           type="button"
           className="scrape-run-toggle"
           onClick={() => setOpen((v) => !v)}
-          aria-expanded={open}
+          aria-expanded={expanded}
           aria-controls="scrape-run-list"
         >
-          {open ? <ChevronDown size={15} aria-hidden="true" /> : <ChevronRight size={15} aria-hidden="true" />}
+          {expanded ? <ChevronDown size={15} aria-hidden="true" /> : <ChevronRight size={15} aria-hidden="true" />}
           <span className="ico-badge scrape-run-ico">
             {running ? (
               <Loader2 size={15} className="animate-spin" aria-hidden="true" />
+            ) : failed ? (
+              <XCircle size={15} aria-hidden="true" />
             ) : (
               <Globe size={15} aria-hidden="true" />
             )}
@@ -97,7 +105,7 @@ export function ScrapeRunPanel() {
         )}
       </div>
 
-      {open && (
+      {expanded && (
         <div id="scrape-run-list" className="scrape-run-body">
           {running && phase !== 'discovering' && (
             <p className="field-hint hint-icon">

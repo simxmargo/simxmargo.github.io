@@ -9,10 +9,23 @@
 //
 // Docs: https://docs.scrapecreators.com  •  1 credit per search, 0 when cached.
 
-import { apexHost, domainLabel, hostOf, isLinkAggregator, isPlausibleBrandHost, squash } from './hosts.ts'
+import {
+  apexHost,
+  domainLabel,
+  hostOf,
+  isLinkAggregator,
+  isNotABrandName,
+  isPlausibleBrandHost,
+  squash,
+} from './hosts.ts'
 
 const SC_BASE = 'https://api.scrapecreators.com'
-const SC_TIMEOUT = 20_000
+// 9s, not 20s. Measured 2026-08-10: a search answers in 10-20s when the API is warm and
+// hangs to the full timeout when it is not. At 20s a run of 30 searches is 515s against
+// a 150s Edge Function wall clock — which is exactly how discovery started returning 504
+// instead of brands. There are 1,000+ queries in the pool, so a slow one is not worth
+// waiting on: drop it and spend the time on the next.
+const SC_TIMEOUT = 9_000
 
 export interface BrandCandidate {
   brand: string
@@ -23,19 +36,61 @@ export interface BrandCandidate {
   followers: number
   /** Address lifted straight from the bio, when the brand published one. */
   email: string
+  /** The bio says it is looking for creators — an ambassador programme, UGC, gifting. */
+  wantsCreators: boolean
 }
 
-// Queries are a cross product: 20 niches x 7 commerce framings = 140 distinct searches.
-// The framings all say "shop"/"store"/"brand" on purpose — searching a bare topic
+// ── WHAT WE SEARCH FOR ──────────────────────────────────────────────────────────
+//
+// These niches are drawn from the creator's OWN portfolio (`portfolio_brands`) and
+// profile niche, not from a generic idea of "fashion". The brands she has actually
+// been paid by, as of 2026-08-10:
+//
+//   FASHION  Fashion Nova · Oh Polly · Halara · LaceMade · CHNGE · Fashion Chingu ·
+//            Glowmode        → affordable women's fashion, several Asia-based
+//   APPS     Filmora · BeautyPlus · VivaVideo · Hypic · OldRoll · ProCCD ·
+//            Kapi Cam · Reelsapp  → photo/video editing and retro-camera apps
+//   MEDIA    Warner Music Group · Flighthouse Media · Field Office
+//
+// The APPS family is nearly HALF that list and previously had zero query coverage —
+// every search was a clothing search. It is the most proven lead type she has, so it
+// gets its own family rather than being wedged into retail framings that don't fit a
+// company with no storefront.
+//
+// COMMERCE framings say "shop"/"store"/"brand" on purpose — searching a bare topic
 // ("korean skincare") returns dermatologists and beauty bloggers, while the same topic
-// plus a retail word returns the shops.
-const NICHES = [
+// plus a retail word returns the shops. They are the volume engine.
+//
+// INTENT framings target brands that are ALREADY recruiting creators. A brand running
+// an ambassador programme has a budget line and a person whose job is answering pitches;
+// a brand that merely exists has neither. These convert far better and are far scarcer.
+
+const FASHION_NICHES = [
   'activewear', 'swimwear', 'lingerie', 'jewelry', 'skincare', 'haircare',
   'makeup', 'sunglasses', 'handbags', 'sneakers', 'denim', 'loungewear',
   'outerwear', 'athleisure', 'fragrance', 'streetwear', 'knitwear', 'accessories',
-  'womens clothing', 'korean skincare',
+  'womens clothing', 'korean skincare', 'korean fashion', 'y2k fashion',
 ]
-const FRAMINGS = [
+
+// No storefront to search for, so these are named the way the companies name
+// themselves. Every one of these categories is represented in the portfolio.
+const APP_NICHES = [
+  'photo editing app', 'video editing app', 'camera app', 'retro camera app',
+  'photo filter app', 'ai photo editor', 'selfie editor app', 'reels editing app',
+  'lightroom presets', 'preset pack', 'canva templates', 'instagram templates',
+  'content planner app', 'social media scheduling app',
+]
+
+// Agencies and media companies buy creator work in bulk and on retainer — a single
+// yes is worth more than a one-off gifting deal. Warner Music, Flighthouse and Field
+// Office all arrived this way.
+const PARTNER_NICHES = [
+  'influencer marketing agency', 'ugc agency', 'creator talent management',
+  'social media agency', 'record label', 'music marketing agency',
+  'creative agency', 'brand partnerships agency',
+]
+
+const COMMERCE_FRAMINGS = [
   'brand online store',
   'boutique shop',
   'official brand shop',
@@ -44,11 +99,98 @@ const FRAMINGS = [
   'sustainable brand shop',
   'new brand online',
 ]
+const INTENT_FRAMINGS = [
+  'ambassador program',
+  'brand ambassador',
+  'influencer collab',
+  'ugc creators',
+  'creator program',
+  'pr packages',
+]
+// An app or an agency has no "shop", so retail framings return nothing for them.
+// These say the thing those companies actually put in a bio.
+const PARTNER_FRAMINGS = [
+  'creator partnerships',
+  'influencer marketing',
+  'ugc creators wanted',
+  'affiliate program',
+  'official',
+  'now casting creators',
+]
 
-export function queryPool(): string[] {
+/** One niche list crossed with one framing list. */
+interface QueryFamily {
+  niches: string[]
+  framings: string[]
+}
+
+// ORDER IS THE PRIORITY. A run now stops on a wall-clock DEADLINE (see
+// discover-brands), so it may only ever reach the first ten or fifteen queries —
+// which makes the front of this list the part that actually runs. Warm, high-affinity
+// families go first; the broad commerce sweep is the tail that fills a slow day.
+const FAMILIES: QueryFamily[] = [
+  { niches: FASHION_NICHES, framings: INTENT_FRAMINGS }, // brands recruiting creators
+  { niches: APP_NICHES, framings: PARTNER_FRAMINGS }, // the proven portfolio lane
+  { niches: PARTNER_NICHES, framings: PARTNER_FRAMINGS }, // agencies, retainers
+  { niches: FASHION_NICHES, framings: COMMERCE_FRAMINGS }, // volume
+]
+
+/**
+ * The search pool, INTERLEAVED across families.
+ *
+ * Interleaving matters because a run stops on a deadline or when the batch is full —
+ * whichever comes first. Concatenating the families would mean a run that ends early
+ * never issues a single app or agency query, and the whole point of having them is
+ * lost. Round-robin guarantees every family gets a share of whatever budget the run
+ * turns out to have.
+ *
+ * `extra` folds in the creator's own `public_profile.niche` terms so retuning the
+ * media kit retunes discovery, with no redeploy.
+ */
+export function queryPool(extra: string[] = []): string[] {
+  const lists = FAMILIES.map(({ niches, framings }) => {
+    const out: string[] = []
+    for (const n of niches) for (const f of framings) out.push(`${n} ${f}`)
+    return out
+  })
+
+  // Profile niches ride at the FRONT of their own list: they are the creator's own
+  // words for what she covers, so they are the least likely to be off-target.
+  if (extra.length) {
+    lists.unshift(extra.flatMap((n) => INTENT_FRAMINGS.map((f) => `${n} ${f}`)))
+  }
+
   const out: string[] = []
-  for (const n of NICHES) for (const f of FRAMINGS) out.push(`${n} ${f}`)
+  const longest = Math.max(0, ...lists.map((l) => l.length))
+  for (let i = 0; i < longest; i++) {
+    for (const l of lists) if (i < l.length) out.push(l[i])
+  }
   return out
+}
+
+/**
+ * Search terms from `public_profile.niche` ("FASHION · BEAUTY · EDITING · TEMPLATES").
+ *
+ * Single generic words are dropped: "fashion ambassador program" returns the same
+ * mega-brands every run, and those are exactly the accounts that never answer.
+ */
+export function profileNiches(niche: string): string[] {
+  return (niche || '')
+    .split(/[·,|/]+/)
+    .map((s) => s.trim().toLowerCase())
+    .filter((s) => s.length >= 4 && s.split(/\s+/).length <= 3)
+    .filter((s) => !['fashion', 'beauty', 'style', 'lifestyle', 'content'].includes(s))
+}
+
+// What a brand that wants creators actually writes in its bio. Deliberately phrase-led
+// rather than keyword-led: "collab" alone matches creators advertising themselves for
+// collabs, which is the exact population this pipeline exists to filter OUT.
+const WANTS_CREATORS =
+  /(ambassador program|ambassador programme|brand ambassador|become an ambassador|creator program|creator programme|influencer program|affiliate program|ugc creators?|ugc welcome|looking for (ugc |content )?creators?|looking for influencers|looking for ambassadors|seeking creators|creators? wanted|influencers? wanted|apply to (be|join)|join our team of|collab(?:oration)?s? (?:welcome|open)|open for collab|dm (?:us )?(?:for|to) collab|pr (?:package|list)|gifting program)/i
+
+/** Does this bio say the brand is recruiting creators right now? */
+export function wantsCreators(bio: string): boolean {
+  return WANTS_CREATORS.test((bio || '').replace(/\s+/g, ' '))
 }
 
 // Categories that mark a PERSON. These are the accounts a topic search drags in.
@@ -235,12 +377,33 @@ export function toCandidate(p: RawProfile): BrandCandidate | null {
   const usable = full && full.length <= 40 && full.split(/\s+/).length <= 5
   const echoes = usable && (squash(full).includes(squash(label)) || squash(label).includes(squash(full)))
 
+  const brand = echoes ? full : fromDomain
+  // Checked on both the display name and the domain-derived fallback: a magazine's
+  // profile is a brand-shaped account by every other signal we have.
+  if (isNotABrandName(brand) || isNotABrandName(p.full_name ?? '')) return null
+
   return {
-    brand: echoes ? full : fromDomain,
+    brand,
     website,
     country: '',
     handle: p.username ?? '',
     followers: p.follower_count ?? 0,
     email: emailFromBio(p.biography ?? ''),
+    wantsCreators: wantsCreators(p.biography ?? ''),
   }
+}
+
+/**
+ * Brands that say they want creators, first.
+ *
+ * The bio scan is the load-bearing intent signal, not the query. Instagram's profile
+ * search matches mostly on username and display name, so an "ambassador program" query
+ * returns brands whose NAME contains it — a handful. The bio, which every search result
+ * carries anyway, is where a brand actually announces that it is recruiting. So the
+ * intent queries widen the net and this ordering is what reads it.
+ *
+ * Stable: equal-intent candidates keep discovery order.
+ */
+export function intentFirst(candidates: BrandCandidate[]): BrandCandidate[] {
+  return [...candidates].sort((a, b) => Number(b.wantsCreators) - Number(a.wantsCreators))
 }

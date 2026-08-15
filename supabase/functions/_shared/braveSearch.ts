@@ -5,6 +5,18 @@
 // fetch with 403/429 or timed out. Brave already crawled those same pages, so reading its
 // index gets us the contact address without ever touching the origin that blocks us.
 //
+// BRAVE IS AN ENRICHMENT STEP, NOT A FALLBACK (changed 2026-08-09)
+// It used to run only when the site scrape returned nothing, which meant a brand whose
+// homepage published `support@` was written off with `support@` — even though Brave had
+// `press@` indexed from a press-release page the crawler never reached. The index sees
+// pages our six-path crawl does not: press releases, stockist directories, partner
+// listings, the brand's own /collaborations page linked from nowhere obvious.
+//
+// So `scrape-static` now runs BOTH and hands the union to the ranker. Which is also why
+// this module no longer sorts: returning one "best" address meant Brave's idea of best
+// competed with the ranker's. It returns everything that passes ownership, and
+// lib/outreach/pickEmail.ts decides.
+//
 // Docs: https://api-dashboard.search.brave.com/app/documentation/web-search
 // NOTE: the free plan is rate-limited to ~1 request/second — callers must pace themselves.
 
@@ -13,6 +25,7 @@ import {
   brandFromTitle,
   emailBelongsToBrand,
   hostOf,
+  isNotABrandName,
   isPlausibleBrandHost,
 } from './hosts.ts'
 
@@ -31,12 +44,10 @@ const JUNK_DOMAIN = [
   'sentry-next.wixpress.com', '2x.png', 'jpg', 'png', 'webp',
 ]
 
-/** Role mailboxes worth pitching, best first. */
-const ROLE_RANK = [
-  'press', 'pr', 'collab', 'collabs', 'collaborations', 'partnerships', 'partner',
-  'marketing', 'influencer', 'wholesale', 'media', 'hello', 'info', 'contact',
-  'support', 'help', 'sales', 'team', 'admin', 'enquiries', 'inquiries', 'office',
-]
+// The ROLE_RANK list that lived here is gone. Ordering role mailboxes was a THIRD copy
+// of "which address is best", alongside the scraper's classifyEmail and the admin UI's
+// TYPE_RANK — and it had already drifted, ranking `press` above `collabs`. All three now
+// defer to lib/outreach/pickEmail.ts.
 
 const EMAIL_RE = /[\w.\-+]+@[\w\-]+\.[\w.\-]{2,}/g
 
@@ -66,15 +77,6 @@ function isJunk(email: string): boolean {
 
 /** Ownership test lives in hosts.ts — the static scraper applies the same rule. */
 export const belongsToBrand = emailBelongsToBrand
-
-/** Lower is better. Role mailboxes beat personal ones; same-domain beats free mail. */
-function rank(email: string, website: string): number {
-  const [local, domain] = email.split('@')
-  const roleIdx = ROLE_RANK.findIndex((r) => local.toLowerCase().startsWith(r))
-  const roleScore = roleIdx === -1 ? ROLE_RANK.length : roleIdx
-  const domainPenalty = domain.toLowerCase() === website.toLowerCase().replace(/^www\./, '') ? 0 : 50
-  return roleScore + domainPenalty
-}
 
 /** Every address in one result's text, paired with the page it came from. */
 function harvest(r: BraveResult): EmailHit[] {
@@ -109,17 +111,26 @@ async function search(apiKey: string, query: string, offset = 0): Promise<BraveR
 }
 
 /**
- * Find a contact address for one brand. Runs up to three phrasings, stopping as soon
- * as an address that passes belongsToBrand() turns up.
+ * EVERY contact address the index knows for one brand, unranked.
  *
- * `pause` is awaited between queries because Brave's free plan allows ~1 req/sec.
+ * Runs up to three phrasings and STOPS at the first that yields usable addresses — the
+ * early break is the quota control. Brave's free plan is ~2,000 queries a month and a
+ * 100-brand discovery run enriches most of them, so spending three queries per brand
+ * where one answered would put a single run near a fifth of the monthly budget.
+ *
+ * Returns the whole harvest from that phrasing rather than a single winner: the caller
+ * merges these with whatever the site scrape found and ranks the union once. A page can
+ * list `press@` and `collabs@` together, and picking one here would throw the other away
+ * before the ranker ever saw it.
+ *
+ * `pause` is awaited between queries because the free plan allows ~1 req/sec.
  */
-export async function findBrandEmail(
+export async function findBrandEmails(
   apiKey: string,
   brand: string,
   website: string,
   pause: (ms: number) => Promise<void> = (ms) => new Promise((r) => setTimeout(r, ms)),
-): Promise<EmailHit | null> {
+): Promise<EmailHit[]> {
   const site = website.replace(/^www\./, '')
   const queries = [
     `"${site}" contact email`,
@@ -150,9 +161,7 @@ export async function findBrandEmail(
     if (candidates.length) break
   }
 
-  if (!candidates.length) return null
-  candidates.sort((a, b) => rank(a.email, site) - rank(b.email, site))
-  return candidates[0]
+  return candidates
 }
 
 // ── Brand discovery (the fallback when ScrapeCreators credits run out) ───────────
@@ -165,6 +174,8 @@ export interface BraveBrandCandidate {
   handle: string
   followers: number
   email: string
+  /** Always false here — a web result carries no bio to read intent from. */
+  wantsCreators: boolean
 }
 
 // A cross product, not a list — 18 niches x 6 framings = 108 distinct searches, each
@@ -203,13 +214,18 @@ export async function braveDiscover(
     // Collapse regional subdomains BEFORE storing, so the domain we scrape and
     // de-duplicate on is the company's, not one of its country storefronts.
     const website = apexHost(host)
+    const brand = brandFromTitle(r.title ?? '', host)
+    // A web search for "sustainable brand official store" surfaces award pages and
+    // trade-body directories that sit on perfectly ordinary domains.
+    if (isNotABrandName(brand) || isNotABrandName(r.title ?? '')) continue
     out.push({
-      brand: brandFromTitle(r.title ?? '', host),
+      brand,
       website,
       country: '',
       handle: '',
       followers: 0,
       email: '',
+      wantsCreators: false,
     })
   }
   return out

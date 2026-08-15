@@ -50,6 +50,15 @@ interface ScrapeRunState {
   notes: string[]
   totalFound: number
   startedAt: number | null
+  /**
+   * The run ENDED IN AN ERROR, as opposed to legitimately finding nothing.
+   *
+   * Both used to land on `phase: 'done'` with an empty `items`, so the panel's
+   * collapsed line read "Nothing to scrape" either way and the actual reason was
+   * a note you had to expand to see. A 504 from discovery therefore looked like a
+   * quiet day for a full day.
+   */
+  failed: boolean
   dismiss: () => void
 }
 
@@ -59,7 +68,9 @@ export const useScrapeRun = create<ScrapeRunState>((set) => ({
   notes: [],
   totalFound: 0,
   startedAt: null,
-  dismiss: () => set({ items: [], phase: 'idle', notes: [], totalFound: 0, startedAt: null }),
+  failed: false,
+  dismiss: () =>
+    set({ items: [], phase: 'idle', notes: [], totalFound: 0, startedAt: null, failed: false }),
 }))
 
 export function isRunning(): boolean {
@@ -112,6 +123,7 @@ export async function startScrapeRun(
     notes: [],
     totalFound: 0,
     startedAt: Date.now(),
+    failed: false,
   })
 
   let inputs: ScrapeInput[]
@@ -120,6 +132,7 @@ export async function startScrapeRun(
   } catch (err) {
     useScrapeRun.setState({
       phase: 'done',
+      failed: true,
       notes: [err instanceof Error ? err.message : 'Could not find brands to scrape.'],
     })
     return
@@ -148,6 +161,7 @@ export async function startScrapeRun(
   } catch (err) {
     useScrapeRun.setState({
       phase: 'done',
+      failed: true,
       notes: [err instanceof Error ? err.message : 'Could not queue the scrape.'],
     })
     return
