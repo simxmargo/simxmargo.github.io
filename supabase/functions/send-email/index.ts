@@ -54,14 +54,19 @@ async function handleSend(svc: SupabaseClient, body: SendBody): Promise<Response
     if (e instanceof SendBlockedError) {
       // 409 for a duplicate: the request was well-formed, it conflicts with a send
       // that already happened. 400 would read as "you sent something malformed".
+      // 423 Locked for the kill switch: the resource (the sending account) is
+      // deliberately locked; neither waiting (429) nor fixing the request (400) helps
+      // — the admin has to unpause in Settings.
       const status =
         e.code === 'capped'
           ? 429
-          : e.code === 'duplicate_company'
-            ? 409
-            : e.code === 'not_configured' || e.code === 'no_account'
-              ? 503
-              : 400
+          : e.code === 'paused'
+            ? 423
+            : e.code === 'duplicate_company'
+              ? 409
+              : e.code === 'not_configured' || e.code === 'no_account'
+                ? 503
+                : 400
       return json({ error: e.message, code: e.code }, status)
     }
     const invalid = e instanceof GoogleAuthError && e.invalidGrant

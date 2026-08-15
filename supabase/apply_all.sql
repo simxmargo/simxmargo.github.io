@@ -1,5 +1,5 @@
--- GENERATED: paste this whole file into the Supabase SQL Editor (Dashboard → SQL Editor → New query → Run).
--- Concatenation of every supabase/migrations/*.sql, in order. Idempotent — safe to re-run.
+-- GENERATED: paste this whole file into the Supabase SQL Editor (Dashboard -> SQL Editor -> New query -> Run).
+-- Concatenation of every supabase/migrations/*.sql, in order. Idempotent - safe to re-run.
 -- Source of truth remains the individual files in supabase/migrations/.
 
 -- ===== 0001_init.sql =====
@@ -620,3 +620,483 @@ revoke all on function public.sending_account_status() from public, anon;
 grant execute on function public.sending_account_status() to authenticated;
 
 commit;
+
+-- ===== 0013_send_queue.sql =====
+-- 0013_send_queue.sql
+-- Makes the EXISTING `send_queue` table (0001_init.sql) actually drivable, and turns
+-- on the scheduling half: pg_cron + pg_net + an atomic claim function.
+--
+-- WHY THIS IS AN ALTER, NOT A CREATE:
+--   `send_queue` has existed since 0001 and already carries `trg_block_suppressed`,
+--   the BEFORE INSERT trigger that refuses sends to suppressed addresses. Recreating
+--   the table would drop that trigger on the floor — the one piece of CAN-SPAM
+--   enforcement the system has left now that the opt-out footer is gone (§7). So this
+--   migration adapts to the original column names (`scheduled_for`, `error`) and the
+--   original status vocabulary ('queued', not 'pending') rather than renaming them.
+--
+-- WHY A 'sending' STATUS MATTERS:
+--   The gap between "this is due" and "Gmail accepted it" contains a network call.
+--   Without a claimed state, two overlapping cron ticks both see the same due row and
+--   the brand receives the pitch twice. claim_due_sends() flips rows to 'sending'
+--   inside the same statement that selects them, under FOR UPDATE SKIP LOCKED, so a
+--   second worker cannot see them at all.
+--
+-- Idempotent — `npm run db:apply` re-runs every migration file.
+
+begin;
+
+-- pg_cron schedules the drain; pg_net is how a scheduled SQL job reaches an Edge
+-- Function over HTTP. Both ship with Supabase but are not enabled by default.
+create extension if not exists pg_cron;
+create extension if not exists pg_net;
+
+-- ---------------------------------------------------------------------------
+-- Columns 0001 didn't have.
+-- ---------------------------------------------------------------------------
+
+-- Needed to detect a worker that died mid-send: "claimed, but not touched in 10
+-- minutes" is only answerable if we record when a row was last touched.
+alter table public.send_queue add column if not exists updated_at timestamptz not null default now();
+
+-- Gmail's id for the sent message — the only durable handle for "which message was
+-- this?" when reconciling against the sent folder later.
+alter table public.send_queue add column if not exists gmail_message_id text not null default '';
+
+-- 0001 declared reply_to NOT NULL with no default, so every insert had to supply it.
+-- The Reply-To is now derived server-side from public_profile at send time (one source
+-- of truth), so the column must not force the caller to duplicate it.
+alter table public.send_queue alter column reply_to set default '';
+
+-- ---------------------------------------------------------------------------
+-- Indexes
+-- ---------------------------------------------------------------------------
+
+-- The drain's hot path: "what is queued and due?"
+create index if not exists send_queue_due_idx
+  on public.send_queue (scheduled_for)
+  where status = 'queued';
+
+create index if not exists send_queue_contact_idx on public.send_queue (contact_id);
+
+-- One live send per contact. Double-clicking "Queue for Outreach", or queuing a brand
+-- that's already waiting, must not put the same pitch on the wire twice. Terminal rows
+-- (sent/failed/canceled) are excluded so re-sending later stays possible.
+create unique index if not exists send_queue_one_live_per_contact
+  on public.send_queue (contact_id)
+  where status in ('queued','sending');
+
+-- ---------------------------------------------------------------------------
+-- claim_due_sends(): atomically hand a worker the rows it may send.
+--
+-- SECURITY DEFINER and revoked from anon/authenticated: only the service role (which
+-- exists solely inside Edge Functions) can claim work. The browser queues and cancels
+-- through RLS; it can never trigger a send directly.
+-- ---------------------------------------------------------------------------
+create or replace function public.claim_due_sends(p_limit int default 5)
+returns setof public.send_queue
+language sql
+volatile
+security definer
+set search_path = public
+as $$
+  update public.send_queue q
+     set status = 'sending',
+         attempts = q.attempts + 1,
+         updated_at = now()
+   where q.id in (
+     select id
+       from public.send_queue
+      where status = 'queued'
+        and scheduled_for <= now()
+      order by scheduled_for
+      for update skip locked
+      limit greatest(1, least(p_limit, 25))
+   )
+  returning q.*;
+$$;
+
+revoke all on function public.claim_due_sends(int) from public, anon, authenticated;
+
+-- ---------------------------------------------------------------------------
+-- Reclaim rows stranded in 'sending' by a worker that died mid-flight (function
+-- timeout, a deploy landing mid-tick). Ten minutes is far longer than a send takes,
+-- so anything older is genuinely orphaned.
+--
+-- Back to 'queued' only while under the attempt ceiling — a row that keeps killing
+-- its worker is a bug, and retrying it forever just keeps re-hitting the same wall.
+-- ---------------------------------------------------------------------------
+create or replace function public.requeue_stuck_sends()
+returns int
+language sql
+volatile
+security definer
+set search_path = public
+as $$
+  with bumped as (
+    update public.send_queue
+       set status = case when attempts >= 3 then 'failed' else 'queued' end,
+           error  = case when attempts >= 3
+                         then 'Gave up after 3 attempts (worker kept dying mid-send).'
+                         else error end,
+           updated_at = now()
+     where status = 'sending'
+       and updated_at < now() - interval '10 minutes'
+    returning 1
+  )
+  select coalesce(count(*), 0)::int from bumped;
+$$;
+
+revoke all on function public.requeue_stuck_sends() from public, anon, authenticated;
+
+commit;
+
+-- ===== 0014_contact_inbound_status.sql =====
+-- 0014_contact_inbound_status.sql
+-- Adds 'inbound' to the contacts status vocabulary.
+--
+-- WHY: every scraped lead sat at 'new' forever, which made the Status column carry no
+-- information at all. The gap wasn't cosmetic — the vocabulary had no way to say the
+-- one thing that most changes how you treat a brand: THEY contacted US.
+--
+--   new      scraped, never touched          (cold, we found them)
+--   inbound  they reached out first          (warm — from a Work-with-me inquiry)
+--   queued   scheduled to send
+--   sent     pitched, awaiting a reply
+--   replied  they answered our pitch
+--   bounced  delivery failed
+--   skip     deliberately passed over
+--
+-- 'inbound' and 'replied' are deliberately distinct: both mean a human wrote to you,
+-- but one is a lead that arrived warm and the other is a cold pitch that worked. They
+-- deserve different follow-ups, and collapsing them would lose the only signal that
+-- tells you whether outreach is actually converting.
+--
+-- Idempotent — drop-then-add, so db:apply can re-run it.
+
+begin;
+
+alter table public.contacts drop constraint if exists contacts_status_check;
+
+alter table public.contacts add constraint contacts_status_check
+  check (status = any (array[
+    'new'::text, 'inbound'::text, 'queued'::text, 'sent'::text,
+    'replied'::text, 'bounced'::text, 'skip'::text
+  ]));
+
+commit;
+
+-- ===== 0015_sender_blocklist.sql =====
+-- 0015_sender_blocklist.sql
+-- Makes "Mark as spam" mean what people assume it means.
+--
+-- Before this, `spam` was only a folder label on ONE row: the same address could fill
+-- the inbox again the next day and nothing stopped it. The button therefore had to be
+-- tooltipped "Move this message to Spam", because promising sender-level filtering
+-- would have left real spam unfiltered while the operator believed it was handled.
+--
+-- Three parts:
+--   blocked_senders          — the list. Email is the primary key, so blocking twice
+--                              is a no-op rather than a duplicate.
+--   apply_sender_blocklist() — BEFORE INSERT trigger; new mail from a blocked address
+--                              lands in Spam without ever appearing in the inbox.
+--   set_inquiry_spam()       — the single call the UI makes. Blocking and sweeping the
+--                              sender's existing messages must happen together or the
+--                              inbox is left half-cleaned.
+--
+-- Idempotent — `npm run db:apply` re-runs every migration file.
+
+begin;
+
+create table if not exists public.blocked_senders (
+  -- Stored lowercased by the RPC below; matching is exact, NOT domain-wide. Blocking
+  -- "someone@gmail.com" must never blackhole every gmail.com sender.
+  email       text primary key,
+  created_at  timestamptz not null default now()
+);
+
+alter table public.blocked_senders enable row level security;
+
+drop policy if exists "admin all" on public.blocked_senders;
+create policy "admin all" on public.blocked_senders
+  for all using (public.is_admin()) with check (public.is_admin());
+
+-- ---------------------------------------------------------------------------
+-- The filter itself. SECURITY DEFINER because inbound inquiries are inserted by the
+-- `collab` Edge Function / anon path, which cannot read blocked_senders under RLS.
+--
+-- BEFORE INSERT, not AFTER: rewriting `status` in flight means a blocked message is
+-- never briefly visible in the inbox, and no UPDATE has to chase it.
+-- ---------------------------------------------------------------------------
+create or replace function public.apply_sender_blocklist()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if new.email is not null
+     and exists (select 1 from public.blocked_senders b where b.email = lower(trim(new.email)))
+  then
+    new.status := 'spam';
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_apply_sender_blocklist on public.collab_inquiries;
+create trigger trg_apply_sender_blocklist
+  before insert on public.collab_inquiries
+  for each row execute function public.apply_sender_blocklist();
+
+-- ---------------------------------------------------------------------------
+-- set_inquiry_spam(id, spam) — what the Spam / Not-spam buttons call.
+--
+-- Marking spam does THREE things atomically: block the sender, sweep every message
+-- they've already sent into Spam, and (implicitly) route their future mail via the
+-- trigger. Doing these as separate client calls would let a failure between them
+-- leave the sender blocked but their existing mail still in the inbox.
+--
+-- Unmarking is the exact inverse, and only restores the messages it swept — a message
+-- that was archived for other reasons stays archived.
+-- ---------------------------------------------------------------------------
+create or replace function public.set_inquiry_spam(p_id uuid, p_spam boolean)
+returns int
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_email text;
+  v_count int;
+begin
+  if not public.is_admin() then
+    raise exception 'Admin only.';
+  end if;
+
+  select lower(trim(email)) into v_email from public.collab_inquiries where id = p_id;
+  if v_email is null or v_email = '' then
+    -- No address to key on: fall back to moving just this row.
+    update public.collab_inquiries
+       set status = case when p_spam then 'spam' else 'read' end
+     where id = p_id;
+    return 1;
+  end if;
+
+  if p_spam then
+    insert into public.blocked_senders (email) values (v_email)
+      on conflict (email) do nothing;
+
+    update public.collab_inquiries
+       set status = 'spam'
+     where lower(trim(email)) = v_email
+       and status <> 'spam';
+  else
+    delete from public.blocked_senders where email = v_email;
+
+    update public.collab_inquiries
+       set status = 'read'
+     where lower(trim(email)) = v_email
+       and status = 'spam';
+  end if;
+
+  get diagnostics v_count = row_count;
+  return coalesce(v_count, 0);
+end;
+$$;
+
+revoke all on function public.set_inquiry_spam(uuid, boolean) from public, anon;
+grant execute on function public.set_inquiry_spam(uuid, boolean) to authenticated;
+
+commit;
+
+-- ===== 0016_contact_alternates.sql =====
+-- 0016_contact_alternates.sql
+-- One contact row per company, with the runners-up kept on the row.
+--
+-- WHY THIS COLUMN EXISTS
+--   The scraper used to write EVERY address a site published. meandem.com publishes one
+--   mailbox per retail store, so it produced 21 rows; goodhousekeeping.com produced 8.
+--   At the time of writing, 93 of 166 contacts — 56% of the table — were redundant rows
+--   for a company already represented, and 96 sat at 'skip' because the post-send sweep
+--   had archived them after the fact.
+--
+--   The scraper now ranks the addresses it finds and writes ONE. That alone would throw
+--   the alternates away, and they are worth keeping for exactly one reason: when the
+--   chosen address bounces, promoting a runner-up costs a single UPDATE, while
+--   re-crawling the site costs a queue slot, a politeness delay per page, and — for the
+--   59% of sites that answer our user agent with 403 — probably yields nothing at all.
+--
+-- SHAPE (validated by the CHECK below, which only asserts it is an array):
+--   [{"email": "press@brand.com", "type": "press", "score": 46}, …]
+--   Capped at 8 entries by MAX_ALTERNATES in lib/outreach/pickEmail.ts.
+--
+-- `confidence` is NOT added here — it has existed since 0001 as the Hunter.io
+-- enrichment score and has been unused since Hunter was dropped. The ranker reuses it
+-- rather than adding a second, near-identical column.
+--
+-- Idempotent — `npm run db:apply` re-runs every migration file.
+
+begin;
+
+alter table public.contacts
+  add column if not exists alternates jsonb not null default '[]'::jsonb;
+
+-- Guard the shape at the boundary rather than trusting every future writer. A scalar or
+-- an object here would break the UI's `.map()` at render time, which is a long way from
+-- the write that caused it.
+alter table public.contacts drop constraint if exists contacts_alternates_is_array;
+alter table public.contacts add constraint contacts_alternates_is_array
+  check (jsonb_typeof(alternates) = 'array');
+
+comment on column public.contacts.alternates is
+  'Runner-up addresses for this company, best first: [{email,type,score}]. Promote one if the chosen address bounces. Written by lib/outreach/pickEmail.ts.';
+
+comment on column public.contacts.confidence is
+  'Address-quality score 0-100 from lib/outreach/pickEmail.ts — role intent plus publication signals. Higher means more likely to be read by a human who handles collaborations.';
+
+-- The working list is ordered by how good the address is, so the sort must not be a
+-- sequential scan once the table grows past a few hundred rows.
+create index if not exists contacts_confidence_idx
+  on public.contacts (confidence desc nulls last);
+
+commit;
+
+-- ===== 0017_daily_sender.sql =====
+-- 0017_daily_sender.sql
+-- The DAILY SEND WINDOW + safety rails for scheduled outreach (BACKEND_DESIGN §6e).
+--
+-- WHY THIS EXISTS
+--   Until now the send drain ran every minute of every day and claimed 5 rows per
+--   tick. In practice that meant 14 pitches leaving in a 2-minute burst at 1 AM —
+--   the exact robotic signature Gmail's abuse heuristics look for, from a free
+--   @gmail.com account with no domain reputation of its own. The account at stake
+--   also RECEIVES every collab inquiry from the media kit, so a suspension would cut
+--   off inbound leads, not just outbound pitches.
+--
+--   The rails, all enforced server-side in drain-queue/sendPitch (the browser only
+--   edits the knobs): a morning send window in PH time, one send per cron tick with
+--   random skips (so gaps look human), a warm-up ramp on the daily cap, an MX check
+--   before an address is auto-queued, and a kill switch that pauses everything when
+--   bounces or auth failures suggest the account is in trouble.
+--
+-- Idempotent — `npm run db:apply` re-runs every migration file.
+
+begin;
+
+-- ---------------------------------------------------------------------------
+-- app_settings: the safety knobs. Single row id=1, admin-editable via RLS
+-- ("admin all" policy from 0007) — the studio Settings tab reads/writes these.
+-- ---------------------------------------------------------------------------
+alter table public.app_settings
+  add column if not exists sending_paused boolean not null default false,
+  add column if not exists paused_reason text not null default '',
+  add column if not exists auto_queue boolean not null default true,
+  add column if not exists auto_queue_min_confidence int not null default 55,
+  add column if not exists send_weekdays_only boolean not null default true,
+  add column if not exists send_window_start int not null default 8,
+  add column if not exists send_window_end int not null default 11;
+
+comment on column public.app_settings.sending_paused is
+  'Kill switch. Set by the admin, or automatically by drain-queue on a bounce spike / repeated failures. While true, NOTHING sends — including manual queue rows.';
+comment on column public.app_settings.paused_reason is
+  'Why sending_paused was set — shown in the studio so unpausing is an informed act.';
+comment on column public.app_settings.auto_queue is
+  'When true, drain-queue tops the queue up each morning from validated high-confidence NEW contacts, up to the day''s remaining budget.';
+comment on column public.app_settings.auto_queue_min_confidence is
+  'Floor on contacts.confidence (0-100, lib/outreach/pickEmail.ts) for auto-queueing. 55 admits collab/marketing desks; front-door addresses need liveness bonuses to clear it.';
+comment on column public.app_settings.send_window_start is
+  'Send window start hour in Asia/Manila (inclusive). Sends happen only inside [start, end).';
+comment on column public.app_settings.send_window_end is
+  'Send window end hour in Asia/Manila (exclusive).';
+
+-- Constrain the window to sane values so a typo cannot silence sending forever
+-- (start >= end would never match any hour).
+alter table public.app_settings drop constraint if exists app_settings_send_window_sane;
+alter table public.app_settings add constraint app_settings_send_window_sane
+  check (send_window_start >= 0 and send_window_end <= 24 and send_window_start < send_window_end);
+
+-- ---------------------------------------------------------------------------
+-- gmail_account: bounce-sweep bookkeeping (the sweep itself is scope-gated —
+-- it only runs once the account is reconnected with gmail.readonly).
+-- ---------------------------------------------------------------------------
+alter table public.gmail_account
+  add column if not exists last_bounce_check_at timestamptz;
+
+-- ---------------------------------------------------------------------------
+-- domain_checks: MX lookup cache for the pre-send dead-address gate.
+--
+-- One row per recipient DOMAIN, not per address — every mailbox at a domain
+-- shares its MX records. Written only by Edge Functions (service role); the
+-- admin may read it for debugging. has_mx NULL means "lookup failed, unknown"
+-- — unknown does NOT block a send, only a definite no-MX does.
+-- ---------------------------------------------------------------------------
+create table if not exists public.domain_checks (
+  domain      text primary key,
+  has_mx      boolean,
+  checked_at  timestamptz not null default now()
+);
+
+alter table public.domain_checks enable row level security;
+drop policy if exists "admin read" on public.domain_checks;
+create policy "admin read" on public.domain_checks
+  for select to authenticated using (public.is_admin());
+revoke all on table public.domain_checks from anon;
+revoke insert, update, delete on table public.domain_checks from authenticated;
+
+-- ---------------------------------------------------------------------------
+-- sending_safety_status(): bounce-detection visibility for the Settings card.
+--
+-- A SEPARATE function rather than new columns on sending_account_status():
+-- `create or replace` cannot change a function's return signature, so widening
+-- the existing RPC would break 0012's idempotent re-run under db:apply.
+-- Same pattern as 0012: SECURITY DEFINER past the deny-all RLS, explicit
+-- column list (never the token), is_admin() in the WHERE — fail closed.
+-- ---------------------------------------------------------------------------
+create or replace function public.sending_safety_status()
+returns table (
+  can_detect_bounces    boolean,
+  last_bounce_check_at  timestamptz
+)
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select
+    (g.scope like '%gmail.readonly%') as can_detect_bounces,
+    g.last_bounce_check_at
+  from public.gmail_account g
+  where g.id = 1 and public.is_admin();
+$$;
+
+revoke all on function public.sending_safety_status() from public, anon;
+grant execute on function public.sending_safety_status() to authenticated;
+
+-- ---------------------------------------------------------------------------
+-- Narrow the send drain's cron schedule to 00:00–09:59 UTC (08:00–17:59 PH).
+--
+-- The FUNCTION enforces the real window from app_settings (default 8–11 AM PH)
+-- on every tick — this schedule is the outer envelope, wide enough that the
+-- admin can move the window anywhere in the PH working day without another
+-- migration, while the 14 hours where nothing should ever send get zero
+-- invocations at the source.
+--
+-- cron.alter_job keeps the job's COMMAND untouched — the command embeds
+-- CRON_SECRET and this repo is public, so it must never appear here.
+-- The scraper drain (drain-scrape-jobs) intentionally stays at every-minute:
+-- lead discovery has no reason to sleep.
+-- ---------------------------------------------------------------------------
+do $$
+declare
+  jid bigint;
+begin
+  if exists (select 1 from pg_namespace where nspname = 'cron') then
+    select jobid into jid from cron.job where jobname = 'drain-send-queue';
+    if jid is not null then
+      perform cron.alter_job(jid, schedule => '* 0-9 * * *');
+    end if;
+  end if;
+end $$;
+
+commit;
+

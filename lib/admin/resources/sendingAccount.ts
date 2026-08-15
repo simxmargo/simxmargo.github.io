@@ -68,6 +68,29 @@ export async function readSendingAccount(): Promise<SendingAccount> {
   }
 }
 
+export interface SendingSafety {
+  /** true once the account was connected with gmail.readonly — bounce sweeps can run. */
+  canDetectBounces: boolean
+  lastBounceCheckAt: string | null
+}
+
+// Bounce-detection visibility (migration 0017). Separate RPC from
+// sending_account_status because a function's return signature can't be widened
+// in-place — see the migration header. Same fail-closed semantics.
+export async function readSendingSafety(): Promise<SendingSafety> {
+  const sb = supabaseBrowser
+  if (!sb) throw new Error('Studio is not configured.')
+
+  const { data, error } = await sb.rpc('sending_safety_status').maybeSingle()
+  if (error || !data) return { canDetectBounces: false, lastBounceCheckAt: null }
+
+  const r = data as Record<string, unknown>
+  return {
+    canDetectBounces: r.can_detect_bounces === true,
+    lastBounceCheckAt: typeof r.last_bounce_check_at === 'string' ? r.last_bounce_check_at : null,
+  }
+}
+
 // Shared invoke wrapper: every action posts `{ action }` to the same function and
 // unwraps our `{ error }` body (see lib/admin/fnError.ts) instead of surfacing
 // supabase-js's generic "non-2xx status code".

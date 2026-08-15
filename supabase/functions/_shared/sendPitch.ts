@@ -26,6 +26,7 @@ export type BlockedCode =
   | 'invalid_recipient'
   | 'capped'
   | 'duplicate_company'
+  | 'paused'
 
 export class SendBlockedError extends Error {
   code: BlockedCode
@@ -85,13 +86,70 @@ export async function loadSignatureSource(svc: SupabaseClient): Promise<Signatur
 
 // Rolling 24h window, not "since midnight" — Gmail throttles on rate, and a calendar
 // reset would happily let 2x the cap out across a midnight boundary.
-async function sentInLast24h(svc: SupabaseClient): Promise<number> {
+// Exported: drain-queue budgets its auto-queue top-up from the same count.
+export async function sentInLast24h(svc: SupabaseClient): Promise<number> {
   const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
   const { count } = await svc
     .from('contacts')
     .select('id', { count: 'exact', head: true })
     .gte('last_emailed_at', since)
   return count ?? 0
+}
+
+// The safety knobs (migration 0017), read with `select *` and defaulted field by
+// field so this keeps working against a database that has not applied 0017 yet.
+export interface SendSettings {
+  dailyCap: number
+  warmupStart: number
+  sendingPaused: boolean
+  pausedReason: string
+  autoQueue: boolean
+  autoQueueMinConfidence: number
+  sendWeekdaysOnly: boolean
+  sendWindowStart: number
+  sendWindowEnd: number
+}
+
+export async function loadSendSettings(svc: SupabaseClient): Promise<SendSettings> {
+  const { data } = await svc.from('app_settings').select('*').eq('id', 1).maybeSingle()
+  const s = (data ?? {}) as Record<string, unknown>
+  const num = (v: unknown, d: number): number => (typeof v === 'number' && Number.isFinite(v) ? v : d)
+  const bool = (v: unknown, d: boolean): boolean => (typeof v === 'boolean' ? v : d)
+  return {
+    dailyCap: num(s.daily_cap, DEFAULT_DAILY_CAP),
+    warmupStart: Math.max(1, num(s.warmup_start, 5)),
+    sendingPaused: bool(s.sending_paused, false),
+    pausedReason: typeof s.paused_reason === 'string' ? s.paused_reason : '',
+    autoQueue: bool(s.auto_queue, false),
+    autoQueueMinConfidence: num(s.auto_queue_min_confidence, 55),
+    sendWeekdaysOnly: bool(s.send_weekdays_only, true),
+    sendWindowStart: num(s.send_window_start, 8),
+    sendWindowEnd: num(s.send_window_end, 11),
+  }
+}
+
+// WARM-UP RAMP (BACKEND_DESIGN §6d, finally enforced): the cap a brand-new sending
+// account gets is warmup_start, growing by warmup_start each full week since the
+// FIRST real send, until it reaches daily_cap. 5 → 10 → 15 → 20 on the defaults.
+// Gmail's abuse heuristics treat sudden volume from a quiet account as a takeover
+// signal; a ramp is what "this is a human whose outreach is growing" looks like.
+// Anchoring on the first send (not the connect date) means a long-idle account
+// re-ramps only if the queue was empty long enough for min(sent_at) to matter — the
+// anchor is immutable history, so the ramp can only ever move forward.
+export async function effectiveDailyCap(svc: SupabaseClient, settings: SendSettings): Promise<number> {
+  const { data } = await svc
+    .from('send_queue')
+    .select('sent_at')
+    .not('sent_at', 'is', null)
+    .order('sent_at', { ascending: true })
+    .limit(1)
+    .maybeSingle()
+
+  const first = data?.sent_at ? Date.parse(data.sent_at) : NaN
+  if (!Number.isFinite(first)) return Math.min(settings.dailyCap, settings.warmupStart)
+
+  const weeks = Math.max(0, Math.floor((Date.now() - first) / (7 * 24 * 60 * 60 * 1000)))
+  return Math.min(settings.dailyCap, settings.warmupStart * (1 + weeks))
 }
 
 interface CompanyRow {
@@ -165,17 +223,27 @@ export async function sendPitch(
   }
 
   if (contactId) {
-    const { data: settings } = await svc
-      .from('app_settings')
-      .select('daily_cap')
-      .eq('id', 1)
-      .maybeSingle()
-    const cap = Number(settings?.daily_cap ?? DEFAULT_DAILY_CAP)
+    const settings = await loadSendSettings(svc)
+
+    // The kill switch binds EVERY real send, including an admin's manual one — it
+    // exists because the account looked like it was in trouble, and "just this one"
+    // is how a paused account keeps digging.
+    if (settings.sendingPaused) {
+      throw new SendBlockedError(
+        'paused',
+        settings.pausedReason
+          ? `Sending is paused: ${settings.pausedReason}`
+          : 'Sending is paused in Settings.',
+      )
+    }
+
+    const cap = await effectiveDailyCap(svc, settings)
     const sent = await sentInLast24h(svc)
     if (sent >= cap) {
+      const rampNote = cap < settings.dailyCap ? ` (warm-up ramp; configured cap ${settings.dailyCap})` : ''
       throw new SendBlockedError(
         'capped',
-        `Daily cap reached — ${sent} of ${cap} sent in the last 24 hours.`,
+        `Daily cap reached — ${sent} of ${cap}${rampNote} sent in the last 24 hours.`,
       )
     }
 

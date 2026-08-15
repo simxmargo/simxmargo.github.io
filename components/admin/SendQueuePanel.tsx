@@ -19,7 +19,8 @@ import type { SignatureSource } from '@/lib/emailSignature'
 //
 // Everything here is a view over `send_queue` rows. The countdown is cosmetic — the
 // actual send is pg_cron's job, so a closed tab still sends and a stopped clock never
-// means a stopped queue.
+// means a stopped queue. Due rows wait for the MORNING SEND WINDOW (Settings →
+// Sending safety); "Send now" skips the grace period, not the window.
 
 const LIVE = new Set<SendQueueRow['status']>(['queued', 'sending'])
 // 4 rows is what the fixed-height list holds without an inner scrollbar. The height is
@@ -275,7 +276,7 @@ export function SendQueuePanel({
                   {r.status === 'queued' && (
                     <span className="pill" style={{ whiteSpace: 'nowrap' }}>
                       <Clock size={12} aria-hidden="true" />
-                      {left ? `Sends in ${left}` : 'Sending shortly'}
+                      {left ? `Ready in ${left}` : 'Sends in the next window'}
                     </span>
                   )}
                   {r.status === 'failed' && (

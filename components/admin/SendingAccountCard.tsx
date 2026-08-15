@@ -1,9 +1,14 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
-import { Mail, MailCheck, AlertTriangle, Loader2, CheckCircle2, Unplug, SendHorizonal } from 'lucide-react'
+import { Mail, MailCheck, AlertTriangle, Loader2, CheckCircle2, Unplug, SendHorizonal, ShieldCheck } from 'lucide-react'
 import { useQueryClient } from '@tanstack/react-query'
-import { startGmailConnect, disconnectGmail, type SendingAccount } from '@/lib/admin/resources/sendingAccount'
+import {
+  startGmailConnect,
+  disconnectGmail,
+  type SendingAccount,
+  type SendingSafety,
+} from '@/lib/admin/resources/sendingAccount'
 import { sendEmail } from '@/lib/admin/resources/sendEmail'
 import { useAdminResource, adminKeys, type AdminFetchError } from '@/lib/admin/queries'
 import { useStore } from '@/lib/store'
@@ -29,6 +34,8 @@ const SAMPLE_CONTACT: Contact = {
   notes: '',
   lastEmailedAt: null,
   createdAt: '',
+  confidence: null,
+  alternates: [],
 }
 
 // Settings → Sending account. Connect / verify / disconnect the Gmail account the
@@ -42,7 +49,7 @@ const SAMPLE_CONTACT: Contact = {
 const POLL_MS = 2_500
 const POLL_TIMEOUT_MS = 3 * 60 * 1000 // give up after 3 minutes of an open popup
 
-type Phase = 'idle' | 'connecting' | 'disconnecting' | 'sending'
+type Phase = 'idle' | 'connecting' | 'upgrading' | 'disconnecting' | 'sending'
 
 function formatDay(iso: string | null): string {
   if (!iso) return ''
@@ -54,6 +61,7 @@ function formatDay(iso: string | null): string {
 export function SendingAccountCard() {
   const qc = useQueryClient()
   const q = useAdminResource<SendingAccount>('sendingAccount')
+  const safetyQ = useAdminResource<SendingSafety>('sendingSafety')
   const account = q.data
 
   const [phase, setPhase] = useState<Phase>('idle')
@@ -138,6 +146,63 @@ export function SendingAccountCard() {
         if (elapsed >= POLL_TIMEOUT_MS) {
           stopPolling()
           setError('Timed out waiting for Google. Try connecting again.')
+        }
+      })()
+    }, POLL_MS)
+  }
+
+  // Re-run Google consent on an ALREADY-connected account so the new gmail.readonly
+  // scope (bounce detection) lands. Same popup dance as onConnect, but the success
+  // condition differs: `connected` is true from the FIRST poll tick during a
+  // re-consent (the account never disconnects), so polling it would declare victory
+  // before Google was even opened. What actually flips on success is the stored
+  // scope string, surfaced as sending_safety_status().can_detect_bounces.
+  async function onUpgradeScopes(): Promise<void> {
+    setError('')
+    setNotice('')
+
+    const popup = window.open('about:blank', 'gmail-oauth', 'width=520,height=720')
+    if (!popup) {
+      setError('Your browser blocked the popup. Allow popups for this site and try again.')
+      return
+    }
+    popupRef.current = popup
+    setPhase('upgrading')
+
+    let url: string
+    try {
+      url = await startGmailConnect()
+    } catch (e) {
+      popup.close()
+      stopPolling()
+      setError(e instanceof Error ? e.message : 'Could not start the Google connection.')
+      return
+    }
+    popup.location.href = url
+
+    let elapsed = 0
+    pollRef.current = window.setInterval(() => {
+      void (async () => {
+        elapsed += POLL_MS
+        const closed = popupRef.current?.closed ?? true
+        const res = await safetyQ.refetch()
+
+        if (res.data?.canDetectBounces) {
+          stopPolling()
+          popupRef.current?.close()
+          setNotice('Bounce detection enabled — dead addresses now get suppressed automatically.')
+          // scope + connected_at changed on the account row too.
+          void qc.invalidateQueries({ queryKey: adminKeys.sendingAccount })
+          return
+        }
+        if (closed) {
+          stopPolling()
+          setError('The Google window closed before the new permission was granted. Try again.')
+          return
+        }
+        if (elapsed >= POLL_TIMEOUT_MS) {
+          stopPolling()
+          setError('Timed out waiting for Google. Try again.')
         }
       })()
     }, POLL_MS)
@@ -240,6 +305,30 @@ export function SendingAccountCard() {
 
             {connected ? (
               <>
+                {/* A healthy account has no Connect button, so scope upgrades need
+                    their own affordance: this re-runs Google consent (the deployed
+                    gmail-oauth now asks for gmail.readonly too) and disappears once
+                    the granted scope can read bounce notices. */}
+                {!account?.needsReauth && safetyQ.data?.canDetectBounces === false && (
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-sm"
+                    onClick={() => void onUpgradeScopes()}
+                    disabled={busy}
+                    title="Re-opens Google consent to grant read access for bounce detection. Expect the unverified-app warning — Advanced → continue."
+                  >
+                    {phase === 'upgrading' ? (
+                      <>
+                        <Loader2 size={14} className="animate-spin" aria-hidden="true" /> Waiting for Google…
+                      </>
+                    ) : (
+                      <>
+                        <ShieldCheck size={14} aria-hidden="true" /> Enable bounce detection
+                      </>
+                    )}
+                  </button>
+                )}
+
                 {/* Disconnect is deliberately NOT in the healthy state — this account is
                     meant to stay connected, and a destructive control sitting next to a
                     safe one invites the misclick. It reappears only when the token is
@@ -296,7 +385,7 @@ export function SendingAccountCard() {
               </button>
             )}
 
-            {phase === 'connecting' && (
+            {(phase === 'connecting' || phase === 'upgrading') && (
               <button type="button" className="btn btn-ghost btn-sm" onClick={stopPolling}>
                 Cancel
               </button>

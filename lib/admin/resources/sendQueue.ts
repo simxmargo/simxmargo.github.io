@@ -78,6 +78,25 @@ export async function readSendQueue(): Promise<SendQueueRow[]> {
   return ((data ?? []) as unknown as RawRow[]).map(mapRow)
 }
 
+// When did this account send its FIRST real pitch? Anchor for the warm-up ramp
+// display in Settings — mirrors effectiveDailyCap() in _shared/sendPitch.ts, which
+// is the enforcing copy. Null before any send.
+export async function readFirstSendAt(): Promise<string | null> {
+  const sb = supabaseBrowser
+  if (!sb) throw new Error('Studio is not configured.')
+
+  const { data, error } = await sb
+    .from('send_queue')
+    .select('sent_at')
+    .not('sent_at', 'is', null)
+    .order('sent_at', { ascending: true })
+    .limit(1)
+    .maybeSingle()
+
+  if (error) throw new Error(error.message)
+  return data?.sent_at ?? null
+}
+
 export interface QueueInput {
   contactId: string
   subject: string

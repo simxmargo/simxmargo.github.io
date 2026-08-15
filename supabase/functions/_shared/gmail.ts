@@ -24,7 +24,20 @@ const USERINFO_URL = 'https://openidconnect.googleapis.com/v1/userinfo'
 
 const TIMEOUT_MS = 15_000
 
-export const GMAIL_SCOPES = ['openid', 'email', 'https://www.googleapis.com/auth/gmail.send']
+// gmail.readonly is what BOUNCE DETECTION needs: DSNs from mailer-daemon land as
+// ordinary inbox messages, and send-only scope cannot see them. NOTE the tier jump:
+// gmail.readonly is a RESTRICTED scope (gmail.send is only Sensitive), so on an
+// unverified app Google's consent screen shows the harsher "unverified app" warning
+// — acceptable for this single-owner app, but it means the influencer must click
+// through "Advanced" once when reconnecting. Accounts connected before this scope
+// was added keep working for SENDING; the bounce sweep checks the granted scope
+// string and simply skips until a reconnect grants it.
+export const GMAIL_SCOPES = [
+  'openid',
+  'email',
+  'https://www.googleapis.com/auth/gmail.send',
+  'https://www.googleapis.com/auth/gmail.readonly',
+]
 
 export interface GoogleCreds {
   clientId: string
@@ -291,6 +304,97 @@ export async function sendMessage(accessToken: string, msg: OutgoingMessage): Pr
 
   const sent = body as { id?: string; threadId?: string }
   return { id: sent.id ?? '', threadId: sent.threadId ?? '' }
+}
+
+// ── Reading (bounce detection only) ─────────────────────────────────────────────
+//
+// Both calls require gmail.readonly on the granted token; the caller gates on the
+// stored scope string first, so a send-only account never even attempts them.
+
+const MESSAGES_URL = 'https://gmail.googleapis.com/gmail/v1/users/me/messages'
+
+// Message ids matching a Gmail search query — the same `q` syntax as the search box.
+export async function listMessageIds(accessToken: string, q: string, maxResults = 20): Promise<string[]> {
+  const p = new URLSearchParams({ q, maxResults: String(maxResults) })
+  let res: Response
+  try {
+    res = await fetch(`${MESSAGES_URL}?${p}`, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+      signal: AbortSignal.timeout(TIMEOUT_MS),
+    })
+  } catch (e) {
+    throw new GoogleAuthError(`Could not reach Gmail: ${(e as Error).message}`)
+  }
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}) as Record<string, unknown>)
+    const err = (body as { error?: { message?: string } }).error
+    throw new GoogleAuthError(err?.message || `http_${res.status}`, res.status === 401 || res.status === 403)
+  }
+  const j = (await res.json()) as { messages?: { id?: string }[] }
+  return (j.messages ?? []).map((m) => m.id ?? '').filter(Boolean)
+}
+
+interface GmailPart {
+  mimeType?: string
+  body?: { data?: string }
+  parts?: GmailPart[]
+}
+
+// base64url → UTF-8 text. Gmail pads part data with -/_ alphabet and no padding.
+function decodePartData(data: string): string {
+  try {
+    const b64 = data.replace(/-/g, '+').replace(/_/g, '/')
+    const bin = atob(b64)
+    const bytes = new Uint8Array(bin.length)
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i)
+    return new TextDecoder().decode(bytes)
+  } catch {
+    return ''
+  }
+}
+
+// Flatten every text-bearing part. DSNs hide the failed address in
+// message/delivery-status parts as often as in the human-readable text.
+function collectText(part: GmailPart | undefined, out: string[]): void {
+  if (!part) return
+  const mime = part.mimeType ?? ''
+  if (part.body?.data && (mime.startsWith('text/') || mime.startsWith('message/'))) {
+    out.push(decodePartData(part.body.data))
+  }
+  for (const p of part.parts ?? []) collectText(p, out)
+}
+
+export interface FetchedMessage {
+  headers: Record<string, string>
+  text: string
+}
+
+// One full message: lower-cased header map + all text parts concatenated.
+export async function getMessage(accessToken: string, id: string): Promise<FetchedMessage> {
+  let res: Response
+  try {
+    res = await fetch(`${MESSAGES_URL}/${encodeURIComponent(id)}?format=full`, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+      signal: AbortSignal.timeout(TIMEOUT_MS),
+    })
+  } catch (e) {
+    throw new GoogleAuthError(`Could not reach Gmail: ${(e as Error).message}`)
+  }
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}) as Record<string, unknown>)
+    const err = (body as { error?: { message?: string } }).error
+    throw new GoogleAuthError(err?.message || `http_${res.status}`, res.status === 401 || res.status === 403)
+  }
+  const j = (await res.json()) as {
+    payload?: GmailPart & { headers?: { name?: string; value?: string }[] }
+  }
+  const headers: Record<string, string> = {}
+  for (const h of j.payload?.headers ?? []) {
+    if (h.name) headers[h.name.toLowerCase()] = h.value ?? ''
+  }
+  const texts: string[] = []
+  collectText(j.payload, texts)
+  return { headers, text: texts.join('\n') }
 }
 
 // Which address did the user just connect? Uses the OIDC userinfo endpoint (allowed
