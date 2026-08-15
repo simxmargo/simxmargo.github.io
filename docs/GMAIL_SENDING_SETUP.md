@@ -27,6 +27,12 @@ throttled or suspended; you don't want that account to be the one holding your r
    - App name / support email / developer email: anything sensible
    - **Scopes:** add `https://www.googleapis.com/auth/gmail.send`
      (`openid` and `email` are added automatically and are non-sensitive)
+   - **For bounce detection**, also add `https://www.googleapis.com/auth/gmail.readonly`.
+     ⚠️ This one is **Restricted**: on an unverified app the consent screen shows the
+     harsher warning and you click through **Advanced → Go to app (unsafe)** — fine for
+     a single-owner personal app. Sending works without it; the daily bounce sweep
+     (BACKEND_DESIGN §6e) simply stays off until an account is connected WITH it. If
+     the account was connected before this scope existed, hit **Reconnect** once.
    - **Test users:** add the secondary Gmail address you'll connect
 4. ⚠️ **Publishing status → PUBLISH APP** (it stays *unverified* — that's fine, you just
    click through a warning screen once).
@@ -188,4 +194,9 @@ gone. What exists now:
   opt-out was removed from the template (see `BACKEND_DESIGN.md` §7), so suppression is
   now the only automated honor-the-removal path.
 
-Start `daily_cap` at ~5/day and ramp to 20 over two weeks (§6d).
+The warm-up ramp is now **enforced automatically** (§6d): today's cap is
+`min(daily_cap, warmup_start × (1 + weeks since first send))` — with the defaults
+that's 5 → 10 → 15 → 20 over four weeks. `daily_cap` is the ceiling you set;
+the ramp is the floor of caution under it. Sends go out only in the morning
+window (Settings → Sending safety, default 8–11 AM PH, weekdays), one at a
+time with human-shaped gaps.
