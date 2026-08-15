@@ -43,22 +43,28 @@ export const DEFAULT_TEMPLATE: EmailTemplate = {
   body: [
     'Hi {brand} team,',
     '',
-    "I'm {name} — I make {niche} content, based in {location}.",
+    "I'm {name}, a creator from {location}. My thing is {niche}, and {brand} has been " +
+      "on my list for a while, so I figured I'd just write.",
     '',
-    "I've been following {brand} for a while and would genuinely love to work together. " +
-      'What I had in mind is a Reel plus a few stories showing how {brand} actually fits ' +
-      'into my day, rather than a static flatlay.',
+    // Mirrors the actual collab model (and the rate card's own "concept, shoot,
+    // edit" wording): brand sends the sponsored item, the creator produces the
+    // video end to end.
+    'Most of my brand work is sponsored video — you send the product you want featured, ' +
+      'and I take it from there: concept, shoot, edit, and post. Usually a TikTok or Reel ' +
+      'plus a few stories, with {brand} showing up the way it actually does in my day. ' +
+      'Nothing that looks staged, that stuff underperforms anyway.',
     '',
-    "Would you be open to a paid collab? Happy to start with gifting if that's easier on your end.",
+    "Would a paid collab be something you'd consider? Gifted works too if that's an easier first step.",
     '',
-    'My media kit has the numbers and some past work: {mediaKitUrl}',
+    // [label](url) keeps the raw media-kit URL out of the visible sentence (see
+    // lib/emailBody.ts MD_LINK). Its OWN line, not appended to the socials sentence:
+    // dropEmptyMergeLines() works per line, so sharing one would make an unset
+    // media-kit URL take the platforms down with it.
+    'Rates and numbers are in [my media kit]({mediaKitUrl}).',
     '',
-    // Its OWN line, not appended to the media-kit sentence: dropEmptyMergeLines()
-    // works per line, so sharing one would make an unset media-kit URL take the
-    // platforms down with it.
-    "I'm on TikTok and Instagram as {handle} if you'd like to see the content itself.",
+    "I'm {handle} on TikTok and Instagram if you want to see the content first.",
     '',
-    'Thanks for reading,',
+    'Thanks!',
     '{name}',
   ].join('\n'),
 }
