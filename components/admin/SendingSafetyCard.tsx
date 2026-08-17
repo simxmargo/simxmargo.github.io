@@ -1,32 +1,18 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { AlertTriangle, CheckCircle2, ShieldCheck } from 'lucide-react'
 import { useQueryClient } from '@tanstack/react-query'
 import { adminKeys, useAdminResource } from '@/lib/admin/queries'
 import { saveSettings, type SettingsShape } from '@/lib/admin/resources/settings'
-import { readFirstSendAt } from '@/lib/admin/resources/sendQueue'
 import type { SendingSafety } from '@/lib/admin/resources/sendingAccount'
+import { effectiveCap, fmtHourPH } from '@/lib/outreach/sendWindow'
 import { useStore } from '@/lib/store'
 
 // Settings → Sending safety. The knobs behind the DAILY AUTOMATED sender
 // (drain-queue): kill switch, auto-queue, weekday gating, and the morning send
 // window. Every rule shown here is ENFORCED server-side — this card edits
 // app_settings, it is not the guard.
-
-// Display mirror of effectiveDailyCap() in supabase/functions/_shared/sendPitch.ts
-// — that copy enforces; this one only explains. Keep the formula identical.
-function effectiveCap(dailyCap: number, warmupStart: number, firstSendAt: string | null): number {
-  const first = firstSendAt ? Date.parse(firstSendAt) : NaN
-  if (!Number.isFinite(first)) return Math.min(dailyCap, warmupStart)
-  const weeks = Math.max(0, Math.floor((Date.now() - first) / (7 * 24 * 60 * 60 * 1000)))
-  return Math.min(dailyCap, Math.max(1, warmupStart) * (1 + weeks))
-}
-
-const fmtHour = (h: number): string => {
-  const twelve = h % 12 === 0 ? 12 : h % 12
-  return `${twelve} ${h < 12 ? 'AM' : 'PM'}`
-}
 
 const WINDOW_HOURS = Array.from({ length: 15 }, (_, i) => i + 6) // 6 AM … 8 PM PH
 
@@ -37,20 +23,12 @@ export function SendingSafetyCard() {
   const settings = q.data
   const sentToday = useStore((s) => s.sentToday)
 
-  const [firstSendAt, setFirstSendAt] = useState<string | null>(null)
+  // Shared cache entry with the Outreach tab's Daily cap card, so both explain the
+  // ramp from the same anchor. Display-only: a failed read just shows the base cap.
+  const firstSendQ = useAdminResource<string | null>('firstSendAt')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [saved, setSaved] = useState(false)
-
-  useEffect(() => {
-    let alive = true
-    readFirstSendAt()
-      .then((v) => alive && setFirstSendAt(v))
-      .catch(() => {}) // display-only — the ramp line simply shows the base cap
-    return () => {
-      alive = false
-    }
-  }, [])
 
   async function patch(p: Parameters<typeof saveSettings>[0]): Promise<void> {
     setBusy(true)
@@ -82,7 +60,7 @@ export function SendingSafetyCard() {
     )
   }
 
-  const eff = effectiveCap(settings.dailyCap, settings.warmupStart, firstSendAt)
+  const eff = effectiveCap(settings.dailyCap, settings.warmupStart, firstSendQ.data ?? null)
   const ramping = eff < settings.dailyCap
   const safety = safetyQ.data
 
@@ -170,6 +148,44 @@ export function SendingSafetyCard() {
 
           <div className="field-card">
             <div>
+              <div className="fc-title">Top up leads overnight</div>
+              <div className="fc-sub">
+                Between 4 and 8 AM, discovers and scrapes new brands until enough qualified
+                leads are waiting to fill the day&rsquo;s cap — so the window never opens on an
+                empty pool. Stops at{' '}
+                <input
+                  type="number"
+                  min={0}
+                  max={500}
+                  key={settings.discoveryDailyBudget}
+                  defaultValue={settings.discoveryDailyBudget}
+                  aria-label="Maximum brands to discover per day"
+                  className="input"
+                  style={{ width: 68, display: 'inline-block', padding: '2px 8px', margin: '0 2px' }}
+                  onBlur={(e) => {
+                    const v = Math.max(0, Math.min(500, Math.trunc(Number(e.target.value) || 0)))
+                    if (v !== settings.discoveryDailyBudget) void patch({ discoveryDailyBudget: v })
+                  }}
+                  disabled={busy}
+                />{' '}
+                brands a day — the cost ceiling, since discovery is metered.
+              </div>
+            </div>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={settings.topupEnabled}
+              aria-label="Top up leads overnight"
+              onClick={() => void patch({ topupEnabled: !settings.topupEnabled })}
+              className="switch"
+              disabled={busy}
+            >
+              <span className="switch-knob" />
+            </button>
+          </div>
+
+          <div className="field-card">
+            <div>
               <div className="fc-title">Weekdays only</div>
               <div className="fc-sub">
                 Brand inboxes are read Monday to Friday; weekend pitches sink and read as automated.
@@ -214,7 +230,7 @@ export function SendingSafetyCard() {
               >
                 {WINDOW_HOURS.map((h) => (
                   <option key={h} value={h}>
-                    {fmtHour(h)}
+                    {fmtHourPH(h)}
                   </option>
                 ))}
               </select>
@@ -237,7 +253,7 @@ export function SendingSafetyCard() {
               >
                 {WINDOW_HOURS.map((h) => (
                   <option key={h + 1} value={h + 1}>
-                    {fmtHour(h + 1)}
+                    {fmtHourPH(h + 1)}
                   </option>
                 ))}
               </select>

@@ -25,6 +25,8 @@ export interface SettingsShape {
   sendWeekdaysOnly: boolean
   sendWindowStart: number
   sendWindowEnd: number
+  topupEnabled: boolean
+  discoveryDailyBudget: number
 }
 
 // Whitelisted patch accepted by saveSettings. Only keys present on the patch
@@ -38,6 +40,8 @@ export interface SettingsSavePatch {
   sendWeekdaysOnly?: boolean
   sendWindowStart?: number
   sendWindowEnd?: number
+  topupEnabled?: boolean
+  discoveryDailyBudget?: number
 }
 
 // Read app_settings (id=1). `select *` + per-field defaults so the studio still
@@ -63,6 +67,8 @@ export async function readSettings(): Promise<SettingsShape> {
     sendWeekdaysOnly: bool(s.send_weekdays_only, true),
     sendWindowStart: num(s.send_window_start, 8),
     sendWindowEnd: num(s.send_window_end, 11),
+    topupEnabled: bool(s.topup_enabled, true),
+    discoveryDailyBudget: num(s.discovery_daily_budget, 80),
   }
 }
 
@@ -93,6 +99,12 @@ export async function saveSettings(patch: SettingsSavePatch): Promise<void> {
   }
   if ('sendWindowEnd' in patch) {
     row.send_window_end = Math.max(1, Math.min(24, Math.trunc(Number(patch.sendWindowEnd) || 0)))
+  }
+  if ('topupEnabled' in patch) row.topup_enabled = Boolean(patch.topupEnabled)
+  if ('discoveryDailyBudget' in patch) {
+    // Clamped to the DB's own CHECK range so a bad value fails here with a readable
+    // message rather than as a 23514 from Postgres.
+    row.discovery_daily_budget = Math.max(0, Math.min(500, Math.trunc(Number(patch.discoveryDailyBudget) || 0)))
   }
 
   if (Object.keys(row).length === 0) throw new Error('No updatable fields provided.')

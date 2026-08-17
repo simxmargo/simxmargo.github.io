@@ -15,13 +15,19 @@
 // A candidate whose Instagram bio published an address needs no scraping at all, so it
 // is written straight to `contacts` here and reported separately from the rest.
 //
-// Invoke: POST { "limit": 100 }   (admin-gated)
+// Invoke: POST { "limit": 100, "budget_ms": 60000, "prefer_free": false }
 // Deploy: supabase functions deploy discover-brands --project-ref <ref> --use-api
 // Secret: supabase secrets set SCRAPECREATORS_API_KEY=...
+//
+// TWO CALLERS: the studio button (admin JWT) and `top-up-leads` (cron secret). The
+// latter presents the SERVICE-ROLE key as its bearer purely to satisfy the platform's
+// `verify_jwt` at the gateway — authorization is still the cron secret checked in the
+// handler, so this function does NOT need --no-verify-jwt and keeps both checks.
 
 import { createClient, type SupabaseClient } from 'jsr:@supabase/supabase-js@2'
 import { json, preflight } from '../_shared/http.ts'
 import { requireAdmin } from '../_shared/auth.ts'
+import { isCronCaller } from '../_shared/cronAuth.ts'
 import { normalizeDomain } from '../_shared/scrape.ts'
 import { isNotABrandName } from '../_shared/hosts.ts'
 import { pickBestEmail } from '../../../lib/outreach/pickEmail.ts'
@@ -348,8 +354,13 @@ Deno.serve(async (req) => {
   if (pre) return pre
   if (req.method !== 'POST') return json({ error: 'Method not allowed.' }, 405)
 
-  const denied = await requireAdmin(req)
-  if (denied) return denied
+  // TWO callers now: the studio's button (admin JWT) and `top-up-leads` (cron secret,
+  // relayed from its own scheduled tick). Both spend credits, so both are gated —
+  // just against different credentials.
+  if (!isCronCaller(req)) {
+    const denied = await requireAdmin(req)
+    if (denied) return denied
+  }
 
   const url = Deno.env.get('SUPABASE_URL')
   const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')
@@ -357,19 +368,27 @@ Deno.serve(async (req) => {
   const supabase = createClient(url, serviceKey)
 
   let limit = 12
+  let budgetMs = BUDGET_MS
+  let preferFree = false
   try {
     const body = await req.json()
     if (typeof body?.limit === 'number') limit = body.limit
+    // The top-up calls this on a 10-minute cron and must return well inside its OWN
+    // 150s ceiling, so it asks for a smaller slice of clock than the UI does.
+    if (typeof body?.budget_ms === 'number') budgetMs = body.budget_ms
+    // Past the daily free-source threshold the caller stops paying for Instagram.
+    if (body?.prefer_free === true) preferFree = true
   } catch {
     /* empty body → default */
   }
   limit = Math.max(1, Math.min(MAX_LIMIT, Math.trunc(limit)))
+  budgetMs = Math.max(20_000, Math.min(BUDGET_MS, Math.trunc(budgetMs)))
 
   // Every source is bounded against ONE clock started here, so no combination of slow
   // upstreams can add up past the platform's 150s kill.
   const startedAt = Date.now()
-  const deadline = startedAt + BUDGET_MS
-  const igDeadline = startedAt + Math.round(BUDGET_MS * INSTAGRAM_SHARE)
+  const deadline = startedAt + budgetMs
+  const igDeadline = startedAt + Math.round(budgetMs * INSTAGRAM_SHARE)
   const timeLeft = () => deadline - Date.now()
 
   const known = await loadKnownDomains(supabase)
@@ -406,12 +425,14 @@ Deno.serve(async (req) => {
   ) =>
     reply(
       out,
-      `Stopped at the ${Math.round(BUDGET_MS / 1000)}s time budget after ${tried}. ` +
+      `Stopped at the ${Math.round(budgetMs / 1000)}s time budget after ${tried}. ` +
         `Instagram search is slow right now, so this batch is smaller than usual — run it again for more.`,
     )
 
-  // 1. Instagram, while there are credits and time for it.
-  if (scKey) {
+  // 1. Instagram, while there are credits and time for it. `preferFree` skips it
+  //    outright — the caller has already spent its metered allowance for the day and
+  //    would rather have lower-yield candidates than none.
+  if (scKey && !preferFree) {
     const out = await viaInstagram(scKey, known, limit, igDeadline, extraNiches)
     if (out.candidates.length > 0 && !out.outOfCredits) {
       return out.timedOut

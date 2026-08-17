@@ -8,6 +8,12 @@
 // falls back to the Brave search index, which holds the same pages already crawled.
 // Only when that also comes up empty is the job flagged `needs_browser`.
 //
+// FAILURE IS CLASSIFIED, NOT LUMPED (migration 0018). `blocked` (a CDN refused our
+// user agent) and `no_address` (pages read fine, the site publishes none) are settled
+// verdicts — retrying the identical static fetch can only reach the identical answer,
+// so they are terminal. `unreachable` and `unknown` get up to 3 attempts on a
+// 5min/25min/2h backoff. Claiming is atomic via claim_scrape_jobs().
+//
 // Invoke one job (UI "Scrape" button):  POST { "job_id": "<uuid>" }
 // Or drain the pending queue (pg_cron):  POST {}   (no body)
 //
@@ -38,6 +44,7 @@
 import { createClient } from 'jsr:@supabase/supabase-js@2'
 import { json, preflight } from '../_shared/http.ts'
 import { requireAdmin } from '../_shared/auth.ts'
+import { isCronCaller } from '../_shared/cronAuth.ts'
 import {
   CONTACT_PATHS,
   extractEmailHits,
@@ -88,13 +95,33 @@ async function fetchText(url: string): Promise<{ html: string | null; code: numb
 // A wall of 403/429 means the site refused THIS user agent at the CDN edge — no
 // headless browser fixes that, so pointing the Playwright worker at it is wasted
 // work. Only "pages read fine but carried no address" is a real browser candidate.
-// Length-independent comparison. A plain `===` on a secret leaks its prefix through
-// timing; this is cheap enough that there is no reason to accept that.
-function safeEqual(a: string, b: string): boolean {
-  if (a.length !== b.length) return false
-  let diff = 0
-  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i)
-  return diff === 0
+// How a dead-end is classified, which decides whether it is ever tried again.
+// `blocked` is deliberately terminal: a 403 from a CDN edge is a verdict about our
+// user agent, and the same static fetch will earn the same verdict forever.
+type FailClass = 'blocked' | 'unreachable' | 'no_address' | 'unknown'
+
+const MAX_ATTEMPTS = 3
+// 5 min → 25 min → 2 h. Long enough that a site having a bad afternoon has recovered,
+// short enough that a retry still lands before the next morning's send window.
+const BACKOFF_MS = [5 * 60_000, 25 * 60_000, 2 * 60 * 60_000]
+
+const RETRYABLE: ReadonlySet<FailClass> = new Set<FailClass>(['unreachable', 'unknown'])
+
+/** The columns of `scrape_jobs` this function reads. */
+interface ScrapeJob {
+  id: string
+  brand: string
+  website: string
+  country: string | null
+  attempts: number | null
+}
+
+function classifyEmpty(statuses: Array<number | string>): FailClass {
+  const blocked = statuses.filter((s) => s === 403 || s === 429).length
+  const readable = statuses.filter((s) => s === 200).length
+  if (readable === 0 && blocked > 0) return 'blocked'
+  if (readable === 0) return 'unreachable'
+  return 'no_address' // pages loaded fine, they just publish no address
 }
 
 function diagnoseEmpty(statuses: Array<number | string>): string {
@@ -115,10 +142,7 @@ Deno.serve(async (req) => {
   // pg_cron drain has no session to present, so it carries the same shared secret
   // drain-queue uses, compared in constant time. Without this branch an unauthenticated
   // cron tick 401s — which is what kept scraping tied to an open browser tab.
-  const cronSecret = Deno.env.get('CRON_SECRET') ?? ''
-  const presented = req.headers.get('x-cron-secret') ?? ''
-  const isCron = cronSecret.length > 0 && safeEqual(presented, cronSecret)
-  if (!isCron) {
+  if (!isCronCaller(req)) {
     const denied = await requireAdmin(req)
     if (denied) return denied
   }
@@ -138,25 +162,46 @@ Deno.serve(async (req) => {
     /* empty body — drain mode */
   }
 
-  const base = supabase.from('scrape_jobs').select('*')
-  const { data: jobs, error } = jobId
-    ? await base.eq('id', jobId)
-    : await base.eq('status', 'pending').order('created_at', { ascending: true }).limit(JOB_BATCH)
-  if (error) return json({ error: error.message }, 500)
-
-  // CLAIM THE WHOLE BATCH UP FRONT, in one statement.
+  // CLAIM ATOMICALLY, IN ONE STATEMENT.
   //
   // A run takes ~90s but the cron ticks every minute, so two invocations overlap by
-  // design. Marking each job 'scraping' as its turn came round left the later ones
-  // still 'pending' when the next tick selected — so two workers would crawl the same
-  // brand's site simultaneously. Claiming immediately makes the overlap useful instead
-  // of harmful: the second tick simply picks up the next five.
-  const claimed = (jobs ?? []).map((j) => j.id)
-  if (claimed.length > 0) {
-    await supabase.from('scrape_jobs').update({ status: 'scraping' }).in('id', claimed)
+  // design. This used to be a SELECT followed by an UPDATE, which leaves a window
+  // wide enough for the next tick to select the very same five rows — two workers
+  // crawling one brand's site at once, which wastes the wall clock and is rude to a
+  // site we are trying to make a good impression on. claim_scrape_jobs() (migration
+  // 0018) does the UPDATE and the SELECT in one statement under FOR UPDATE SKIP
+  // LOCKED, so a second invocation cannot see these rows at all.
+  //
+  // Rescue orphans first, so a job stranded by a dead worker rejoins THIS batch
+  // rather than waiting for the next tick.
+  let jobs: ScrapeJob[]
+  if (jobId) {
+    // Single-job mode (the studio's per-row "Scrape" button) addresses a known row
+    // directly — no contention to lose, and the admin expects it to run now.
+    const { data, error } = await supabase.from('scrape_jobs').select('*').eq('id', jobId)
+    if (error) return json({ error: error.message }, 500)
+    jobs = (data ?? []) as ScrapeJob[]
+    if (jobs.length > 0) {
+      await supabase
+        .from('scrape_jobs')
+        .update({ status: 'scraping', attempts: (jobs[0].attempts ?? 0) + 1 })
+        .eq('id', jobId)
+    }
+  } else {
+    await supabase.rpc('requeue_stuck_scrapes')
+    const { data, error } = await supabase.rpc('claim_scrape_jobs', { p_limit: JOB_BATCH })
+    if (error) return json({ error: error.message }, 500)
+    jobs = (data ?? []) as ScrapeJob[]
   }
 
-  const results: Array<{ job_id: string; brand: string; found: number; status: string; error: string }> = []
+  const results: Array<{
+    job_id: string
+    brand: string
+    found: number
+    status: string
+    error: string
+    failClass: FailClass
+  }> = []
 
   // Brave enrichment costs ~1.1-3.3s per job — usually one query answers, and the pacing
   // delay only applies BETWEEN phrasings. Past this mark we stop offering it so a batch
@@ -166,8 +211,15 @@ Deno.serve(async (req) => {
   const BRAVE_DEADLINE_MS = 110_000
   const braveKey = Deno.env.get('BRAVE_API_KEY')?.trim()
 
-  for (const job of jobs ?? []) {
-    const r = { job_id: job.id, brand: job.brand, found: 0, status: 'done', error: '' }
+  for (const job of jobs) {
+    const r = {
+      job_id: job.id,
+      brand: job.brand,
+      found: 0,
+      status: 'done',
+      error: '',
+      failClass: 'unknown' as FailClass,
+    }
 
     try {
       const domain = normalizeDomain(job.website)
@@ -271,11 +323,17 @@ Deno.serve(async (req) => {
         // Either the site blocked us and the index knew nothing either, it genuinely
         // publishes no address, or everything it published belonged to somebody else.
         r.status = 'needs_browser'
-        r.error = pick.rejected.length
-          ? `Found ${pick.rejected.length} address(es), none usable: ${pick.rejected
-              .map((x) => `${x.email} (${x.reason})`)
-              .join('; ')}`
-          : diagnoseEmpty(statuses)
+        if (pick.rejected.length) {
+          // It published addresses and the ranker refused all of them — that is a
+          // verdict about the site's contact page, not a transient miss.
+          r.failClass = 'no_address'
+          r.error = `Found ${pick.rejected.length} address(es), none usable: ${pick.rejected
+            .map((x) => `${x.email} (${x.reason})`)
+            .join('; ')}`
+        } else {
+          r.failClass = classifyEmpty(statuses)
+          r.error = diagnoseEmpty(statuses)
+        }
       } else {
         const w = pick.winner
         const row = {
@@ -305,13 +363,30 @@ Deno.serve(async (req) => {
       }
     } catch (err) {
       r.status = 'error'
+      // An exception is a transient-until-proven-otherwise failure: a network blip, a
+      // malformed page, an upsert losing a race. Worth another go.
+      r.failClass = 'unreachable'
       r.error = err instanceof Error ? err.message : String(err)
     } finally {
       // Always close the job out — a failure must never leave it stuck on 'scraping'.
-      await supabase
-        .from('scrape_jobs')
-        .update({ status: r.status, error: r.error || null, scraped_at: new Date().toISOString() })
-        .eq('id', job.id)
+      //
+      // RETRY, but only where retrying can change the answer. `blocked` and
+      // `no_address` are settled verdicts about the site; re-running the identical
+      // static fetch against them just burns the batch. `attempts` was incremented at
+      // claim time, so this compares against the count INCLUDING the run just made.
+      const attempts = (job.attempts ?? 0) + 1
+      const retryable = r.status !== 'done' && RETRYABLE.has(r.failClass) && attempts < MAX_ATTEMPTS
+      const patch: Record<string, unknown> = {
+        status: retryable ? 'retry' : r.status,
+        error: r.error || null,
+        fail_class: r.status === 'done' ? null : r.failClass,
+        scraped_at: new Date().toISOString(),
+        next_attempt_at: retryable
+          ? new Date(Date.now() + BACKOFF_MS[Math.min(attempts - 1, BACKOFF_MS.length - 1)]).toISOString()
+          : null,
+      }
+      await supabase.from('scrape_jobs').update(patch).eq('id', job.id)
+      if (retryable) r.status = 'retry'
     }
 
     results.push(r)
