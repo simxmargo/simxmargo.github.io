@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { Clock, Check, AlertTriangle, Loader2, X, Send, RotateCcw, Search } from 'lucide-react'
-import { adminKeys } from '@/lib/admin/queries'
+import { adminKeys, useAdminResource } from '@/lib/admin/queries'
 import {
   cancelQueued,
   requeue,
@@ -11,6 +11,8 @@ import {
   SEND_DELAY_MINUTES,
   type SendQueueRow,
 } from '@/lib/admin/resources/sendQueue'
+import type { SettingsShape } from '@/lib/admin/resources/settings'
+import { describeNextSend, nextSendForRow, type SendWindow } from '@/lib/outreach/sendWindow'
 import { QueuePreviewModal } from '@/components/admin/QueuePreviewModal'
 import type { SignatureSource } from '@/lib/emailSignature'
 
@@ -20,7 +22,8 @@ import type { SignatureSource } from '@/lib/emailSignature'
 // Everything here is a view over `send_queue` rows. The countdown is cosmetic — the
 // actual send is pg_cron's job, so a closed tab still sends and a stopped clock never
 // means a stopped queue. Due rows wait for the MORNING SEND WINDOW (Settings →
-// Sending safety); "Send now" skips the grace period, not the window.
+// Sending safety); "Send now" skips the grace period, not the window — so the badge
+// is computed from both (lib/outreach/sendWindow.ts), never the grace period alone.
 
 const LIVE = new Set<SendQueueRow['status']>(['queued', 'sending'])
 // 4 rows is what the fixed-height list holds without an inner scrollbar. The height is
@@ -37,12 +40,12 @@ const FILTERS: { key: FilterKey; label: string; match: (r: SendQueueRow) => bool
   { key: 'all', label: 'All', match: () => true },
 ]
 
-/** mm:ss remaining, or null once it's due. */
-function countdown(iso: string, now: number): string | null {
-  const ms = new Date(iso).getTime() - now
-  if (!Number.isFinite(ms) || ms <= 0) return null
-  const total = Math.ceil(ms / 1000)
-  return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`
+// Falls back to the shipped defaults so the badge still reads sensibly against a
+// database that has not applied 0017, matching readSettings().
+const WINDOW_FALLBACK: SendWindow = {
+  sendWeekdaysOnly: true,
+  sendWindowStart: 8,
+  sendWindowEnd: 11,
 }
 
 function sentAgo(iso: string | null, now: number): string {
@@ -69,6 +72,9 @@ export function SendQueuePanel({
   onChanged: () => void
 }) {
   const qc = useQueryClient()
+  // Shares the parent's cache entry — this is a read of the same key, not a second fetch.
+  const settingsQ = useAdminResource<SettingsShape>('settings')
+  const window_: SendWindow = settingsQ.data ?? WINDOW_FALLBACK
   const [busyId, setBusyId] = useState<string | null>(null)
   const [confirmRow, setConfirmRow] = useState<SendQueueRow | null>(null)
   const [error, setError] = useState('')
@@ -247,7 +253,10 @@ export function SendQueuePanel({
 
           {pageRows.map((r) => {
             const busy = busyId === r.id
-            const left = r.status === 'queued' ? countdown(r.scheduledFor, now) : null
+            // The grace period alone is not when this leaves — the window is. A row
+            // queued on Friday afternoon reads "Sends Monday, 8 AM", not "Ready in 0:00".
+            const due =
+              r.status === 'queued' ? describeNextSend(nextSendForRow(r.scheduledFor, window_, now), now) : ''
 
             return (
               <article
@@ -276,7 +285,7 @@ export function SendQueuePanel({
                   {r.status === 'queued' && (
                     <span className="pill" style={{ whiteSpace: 'nowrap' }}>
                       <Clock size={12} aria-hidden="true" />
-                      {left ? `Ready in ${left}` : 'Sends in the next window'}
+                      {due}
                     </span>
                   )}
                   {r.status === 'failed' && (

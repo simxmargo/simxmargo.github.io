@@ -8,15 +8,16 @@ import type { Contact } from '@/lib/types'
 // Confirmation for a BULK queue — deliberately the one place in this workspace that
 // still asks.
 //
-// Queuing a single brand needs no confirmation: the 5-minute delay plus the Cancel
-// button on the queue card is the undo, and it sits in the same viewport as the click.
-// That reasoning stops scaling in bulk. Undoing twenty is twenty cancels against a
-// five-minute clock, and one stray "select all" followed by one stray click is the
-// difference between a considered send and a mass-mail. So the cost of the action is
-// stated before it happens: how many, to whom, and how many can actually go out today.
+// Queuing a single brand needs no confirmation: the Cancel button on the queue card is
+// the undo, and it sits in the same viewport as the click. That reasoning stops scaling
+// in bulk. Undoing twenty is twenty cancels, and one stray "select all" followed by one
+// stray click is the difference between a considered send and a mass-mail. So the cost
+// of the action is stated before it happens: how many, to whom, on what schedule, and
+// how many can actually go out today.
 export function BulkQueueConfirm({
   contacts,
   remainingToday,
+  schedule,
   progress,
   onConfirm,
   onClose,
@@ -24,6 +25,8 @@ export function BulkQueueConfirm({
   contacts: Contact[]
   /** Cap headroom in the last 24h — anything past this is queued but waits. */
   remainingToday: number
+  /** describeWindow() output, e.g. "weekday mornings, 8–11 AM PH". */
+  schedule: string
   /** Non-null while the queue loop is running. */
   progress: { done: number; total: number } | null
   onConfirm: () => void
@@ -67,8 +70,8 @@ export function BulkQueueConfirm({
           <p className="field-hint hint-icon">
             <Info size={12} aria-hidden="true" />
             <span>
-              Each one gets the current pitch and sends in 5 minutes. You can still cancel them
-              individually from the queue until then.
+              Each one gets the current pitch and goes out on {schedule}, one at a time. You can
+              still cancel them individually from the queue until they send.
             </span>
           </p>
 

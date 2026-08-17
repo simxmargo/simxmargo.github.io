@@ -25,8 +25,9 @@ import { ScrapeRunPanel } from '@/components/admin/ScrapeRunPanel'
 import { SCRAPE_BATCH, buildBatch, startScrapeRun, useScrapeRun } from '@/lib/admin/scrapeRun'
 import { oneContactPerCompany } from '@/lib/admin/dedupeContacts'
 import { useAdminResource, adminKeys } from '@/lib/admin/queries'
-import { queueForOutreach, SEND_DELAY_MINUTES, type SendQueueRow } from '@/lib/admin/resources/sendQueue'
-import { saveSettings } from '@/lib/admin/resources/settings'
+import { queueForOutreach, type SendQueueRow } from '@/lib/admin/resources/sendQueue'
+import { saveSettings, type SettingsShape } from '@/lib/admin/resources/settings'
+import { describeWindow, effectiveCap } from '@/lib/outreach/sendWindow'
 import type { SendingAccount } from '@/lib/admin/resources/sendingAccount'
 import { buildDraft } from '@/lib/emailTemplate'
 import type { SignatureSource } from '@/lib/emailSignature'
@@ -86,6 +87,15 @@ export function OutreachPage() {
   // null draft = follow the store, so a save elsewhere still shows up here.
   const cap = Math.min(capMax, Math.max(capFloor, capDraft ?? dailyCap))
 
+  // The slider sets `daily_cap`; drain-queue then applies the warm-up ramp on top, so
+  // a young account's REAL ceiling is lower than the number under the thumb. Budgeting
+  // against the setting made a capped-out morning look like a stuck queue.
+  const settingsQ = useAdminResource<SettingsShape>('settings')
+  const firstSendQ = useAdminResource<string | null>('firstSendAt')
+  const todaysCap = effectiveCap(cap, settingsQ.data?.warmupStart ?? 5, firstSendQ.data ?? null)
+  const ramping = todaysCap < cap
+  const schedule = settingsQ.data ? describeWindow(settingsQ.data) : 'weekday mornings'
+
   const profileQ = useAdminResource<ProfileShape>('profile')
   const signatureSource: SignatureSource = useMemo(
     () => ({
@@ -117,8 +127,8 @@ export function OutreachPage() {
       ? 'Connect a Gmail account in Settings before queuing outreach.'
       : !account.lastSendAt
         ? 'Send yourself a test email first (Settings → Sending account). Queuing unlocks once it lands.'
-        : sentToday >= dailyCap
-          ? `Daily cap reached — ${sentToday} of ${dailyCap} sent in the last 24 hours.`
+        : sentToday >= todaysCap
+          ? `Daily cap reached — ${sentToday} of ${todaysCap} sent in the last 24 hours.`
           : ''
 
   const countries = useMemo(() => Array.from(new Set(contacts.map((c) => c.country))).sort(), [contacts])
@@ -247,7 +257,7 @@ export function OutreachPage() {
   const pageRows = filtered.slice(safePage * PAGE_SIZE, safePage * PAGE_SIZE + PAGE_SIZE)
 
   // Two different bars: how much of the cap is spent, and where the cap itself sits.
-  const usagePct = `${Math.min(100, (sentToday / Math.max(1, cap)) * 100)}%`
+  const usagePct = `${Math.min(100, (sentToday / Math.max(1, todaysCap)) * 100)}%`
   const capThumbPct = `${capMax > capFloor ? ((cap - capFloor) / (capMax - capFloor)) * 100 : 100}%`
 
   const selectedCount = selected.size
@@ -266,15 +276,20 @@ export function OutreachPage() {
   )
   // Queuing past the cap isn't blocked — drain-queue defers those rows by 30 minutes
   // rather than failing them — but saying so up front beats a queue that looks stuck.
-  const remainingToday = Math.max(0, cap - sentToday)
+  const remainingToday = Math.max(0, todaysCap - sentToday)
 
   return (
     <>
       <header className="main-head outreach-head">
         <div>
           <h1 className="page-title display">Outreach</h1>
+          {/* This line used to promise "sends in 5 minutes", which stopped being true
+              the day the send window shipped — a brand queued on a Friday afternoon
+              sat until Monday while the header said otherwise. */}
           <p className="page-sub">
-            Queue a brand and it sends in {SEND_DELAY_MINUTES} minutes — even if you close this tab.
+            {settingsQ.data?.sendingPaused
+              ? 'Sending is paused — queued pitches wait until you resume it in Settings.'
+              : `Queued pitches go out one at a time on ${schedule} — even if you close this tab.`}
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -439,12 +454,21 @@ export function OutreachPage() {
               <div className="flex items-center justify-between" style={{ marginBottom: 10 }}>
                 <span className="muted-sm">Last 24 hours</span>
                 <span className="muted-sm">
-                  {sentToday} / {cap}
+                  {sentToday} / {todaysCap}
                 </span>
               </div>
               <div className="slider-track" style={{ position: 'relative', height: 6 }}>
                 <div className="slider-fill" style={{ width: usagePct, transition: 'width 0.3s' }} />
               </div>
+
+              {/* Only while the two numbers actually differ — on a warmed-up account
+                  the ramp is invisible, and a permanent line explaining it is noise. */}
+              {ramping && (
+                <p className="field-hint" style={{ marginTop: 8 }}>
+                  Warming up: <strong>{todaysCap}</strong> of {cap} today, +
+                  {settingsQ.data?.warmupStart ?? 5} each week.
+                </p>
+              )}
 
               {/* The control — a separate row so "how much is spent" and "what the
                   ceiling is" never read as the same bar. */}
@@ -532,6 +556,7 @@ export function OutreachPage() {
         <BulkQueueConfirm
           contacts={bulkTargets}
           remainingToday={remainingToday}
+          schedule={schedule}
           progress={bulk}
           onConfirm={() => void queueSelected()}
           onClose={() => setConfirmBulk(false)}

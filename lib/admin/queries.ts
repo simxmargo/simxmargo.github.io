@@ -7,7 +7,7 @@ import { readSocials } from './resources/socials'
 import { readInquiries } from './resources/inquiries'
 import { readSettings } from './resources/settings'
 import { readSendingAccount, readSendingSafety } from './resources/sendingAccount'
-import { readSendQueue } from './resources/sendQueue'
+import { readFirstSendAt, readSendQueue } from './resources/sendQueue'
 
 // Centralized admin read-cache. Each resource now reads DIRECTLY from Supabase
 // (authenticated admin session + RLS is_admin()), replacing the old /api/admin/*
@@ -34,6 +34,10 @@ export const adminKeys = {
   // The outreach workspace polls this while anything is counting down, so it stays a
   // key of its own — refetching the queue must never drag contacts through with it.
   sendQueue: ['admin', 'sendQueue'] as const,
+  // The warm-up ramp's anchor (first ever send). Two cards read it — Outreach's Daily
+  // cap and Settings' Sending safety — and it only changes once in the account's life,
+  // so it gets a key of its own rather than riding along with the queue's polling.
+  firstSendAt: ['admin', 'firstSendAt'] as const,
 }
 
 const READERS = {
@@ -45,6 +49,7 @@ const READERS = {
   sendingAccount: readSendingAccount,
   sendingSafety: readSendingSafety,
   sendQueue: readSendQueue,
+  firstSendAt: readFirstSendAt,
 } as const
 
 export type AdminResource = keyof typeof READERS
