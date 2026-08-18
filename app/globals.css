@@ -80,7 +80,21 @@ body {
    elements (the hero name + the marquee) clip themselves instead. */
 .mk .display { font-family: var(--font-druk), 'Druk Wide', 'Archivo Black', system-ui, sans-serif; letter-spacing: -0.01em; }
 .mk *:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
-.mk .amp { font-style: italic; color: var(--accent-text); font-weight: 500; }
+/* The accent word in a headline ("…through *reels*.").
+   It used to inherit the display family and ask it for `italic 500`. Druk Wide ships
+   as ONE face — 700, normal — so that combination matched no @font-face and fell
+   silently through the stack to system-ui, which renders far smaller and lighter
+   beside Druk's tall wide caps. It read as a shrunken word, not an accent.
+   Archivo IS loaded with a real italic, so the contrast is now deliberate: a true
+   italic cut, size-compensated for Druk's larger cap height so the two sit level. */
+.mk .amp {
+  font-family: var(--font-archivo), system-ui, sans-serif;
+  font-style: italic;
+  font-weight: 700;
+  font-size: 1.06em;
+  letter-spacing: -0.03em;
+  color: var(--accent-text);
+}
 .mk .label { text-transform: uppercase; letter-spacing: 0.2em; font-size: 11px; font-weight: 600; color: var(--faint); }
 .mk .wrap { max-width: 1280px; margin: 0 auto; padding: 0 clamp(20px, 5vw, 68px); }
 .mk .ico { width: 100%; height: 100%; display: block; }
@@ -101,7 +115,12 @@ body {
 .mk .prog-fill { height: 100%; width: 100%; background: var(--accent); transform: scaleX(0); transform-origin: left; }
 
 /* nav */
-.mk .nav { position: fixed; top: 0; left: 0; right: 0; z-index: 50; background: linear-gradient(to bottom, rgba(11, 10, 8, 0.9), rgba(11, 10, 8, 0)); }
+/* The bar is a 68px-tall fixed element whose lower half is a transparent gradient, so
+   it was swallowing taps over content that was plainly visible beneath it. Turning off
+   pointer events on the bar and back on for its controls keeps the scrim purely
+   visual — you can tap what you can see. */
+.mk .nav { position: fixed; top: 0; left: 0; right: 0; z-index: 50; background: linear-gradient(to bottom, rgba(11, 10, 8, 0.9), rgba(11, 10, 8, 0)); pointer-events: none; }
+.mk .nav .navwrap > * { pointer-events: auto; }
 .mk .navwrap { height: 68px; }
 .mk .brand { font-size: 22px; font-weight: 600; color: var(--ink); text-decoration: none; letter-spacing: -0.01em; }
 .mk .nlink { position: relative; color: var(--muted); text-decoration: none; font-size: 14px; font-weight: 500; padding-bottom: 3px; transition: color 0.2s ease; }
@@ -435,6 +454,73 @@ body {
   .mk .reveal { transition: none; opacity: 1; transform: none; }
   .mk .scroll-cue .ln::after { animation: none; }
   .mk .mqtrack.mq-left, .mk .mqtrack.mq-right { animation: none; }
+}
+
+/* ── Mobile pass ────────────────────────────────────────────────────────────────
+   The design was drawn wide, and its desktop proportions were carried down almost
+   unchanged: a scrim nav that reads as a gradient over whitespace becomes a
+   see-through band over content, and 22px link rows that are easy with a cursor are
+   not with a thumb. Two separate levers on purpose — `max-width` for layout, and
+   `pointer: coarse` for anything sized by the input device, so a narrow desktop
+   window keeps its tighter density. */
+
+@media (max-width: 920px) {
+  /* Below this the page scrolls content under the bar rather than the hero's dark
+     scrim, so the gradient stops doing its job — the wordmark ended up sitting on top
+     of form fields and brand tiles. An opaque bar with a hairline is the honest
+     version; the translucent one is only used where the blur actually lands. */
+  .mk .nav { background: rgba(11, 10, 8, 0.94); border-bottom: 1px solid var(--line); }
+}
+@supports ((backdrop-filter: blur(2px)) or (-webkit-backdrop-filter: blur(2px))) {
+  @media (max-width: 920px) {
+    .mk .nav {
+      background: rgba(11, 10, 8, 0.72);
+      -webkit-backdrop-filter: blur(14px) saturate(1.2);
+      backdrop-filter: blur(14px) saturate(1.2);
+    }
+  }
+}
+
+@media (max-width: 620px) {
+  /* The closing line is the emotional payoff of the page, and clamp() bottomed it out
+     at 30px for every phone — smaller than the section headings above it. Scaling with
+     the viewport lets it land near 36px on a 390px screen. Druk Wide is a very wide
+     face, so the wrap guard is not optional at this size. */
+  .mk .foot-name { font-size: clamp(34px, 9vw, 66px); overflow-wrap: break-word; }
+  .mk .foot-grid { align-items: flex-start; gap: 18px; }
+}
+
+@media (pointer: coarse) {
+  /* WCAG 2.5.8 / iOS HIG: 44px minimum. Measured before this: footer links 22px,
+     the copy-email row 24px, the wordmark 33px, "Work with me" 40px. Padding the hit
+     area rather than the text keeps the type sizes the design chose. */
+  .mk .flink,
+  .mk .cm-v,
+  .mk .brand {
+    display: inline-flex;
+    align-items: center;
+    min-height: 44px;
+  }
+  .mk .btn-sm { padding: 12px 19px; }
+  /* Keyed to the INPUT DEVICE, not the viewport: a tablet holds these at arm's length
+     with a thumb and needs the same legibility a phone does, but it never matched a
+     phone-width breakpoint. 11px uppercase at 0.2em tracking in --faint was under any
+     floor worth keeping, and it labels the contact form. */
+  .mk .label { font-size: 12.5px; letter-spacing: 0.16em; }
+  .mk .flink { font-size: 16px; }
+  .mk .foot-meta { font-size: 13px; }
+  /* Hover-driven affordances never resolve on touch, so make the footer links carry a
+     permanent underline instead of revealing one on hover. */
+  .mk .flink { text-decoration: underline; text-decoration-color: color-mix(in srgb, var(--ink) 28%, transparent); text-underline-offset: 5px; }
+}
+
+/* The section links only exist above 620px (they are display:none on phones), so they
+   are sized in their own query — giving them a display here would have un-hidden them.
+   Hit slop rather than padding: .nlink::after is the accent underline pinned to the
+   padding box, so real padding would stretch it past the word. An absolutely
+   positioned ::before takes the taps and leaves the layout exactly where it was. */
+@media (pointer: coarse) and (min-width: 621px) {
+  .mk .nlink::before { content: ''; position: absolute; inset: -11px -4px; }
 }
 
 /* ============================================================================
