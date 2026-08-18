@@ -80,20 +80,27 @@ body {
    elements (the hero name + the marquee) clip themselves instead. */
 .mk .display { font-family: var(--font-druk), 'Druk Wide', 'Archivo Black', system-ui, sans-serif; letter-spacing: -0.01em; }
 .mk *:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
-/* The accent word in a headline ("…through *reels*.").
-   It used to inherit the display family and ask it for `italic 500`. Druk Wide ships
-   as ONE face — 700, normal — so that combination matched no @font-face and fell
-   silently through the stack to system-ui, which renders far smaller and lighter
-   beside Druk's tall wide caps. It read as a shrunken word, not an accent.
-   Archivo IS loaded with a real italic, so the contrast is now deliberate: a true
-   italic cut, size-compensated for Druk's larger cap height so the two sit level. */
+/* The accent word in a headline ("...through *reels*.").
+   SAME-FAMILY EMPHASIS. Two wrong versions preceded this one. It first asked the
+   display family for `italic 500`; Druk Wide ships a single cut (700, normal), so that
+   matched no @font-face and fell silently through to system-ui, rendering far smaller
+   beside Druk's tall wide caps. Swapping in Archivo's real italic fixed the size but
+   made the accent a different typeface from the word before it, which reads as a
+   second voice rather than emphasis.
+   There is no italic cut to switch to, so the oblique is synthesised on the display
+   face itself: same font, same weight, same metrics, just sheared. Colour carries the
+   rest of the emphasis. */
 .mk .amp {
-  font-family: var(--font-archivo), system-ui, sans-serif;
-  font-style: italic;
-  font-weight: 700;
-  font-size: 1.06em;
-  letter-spacing: -0.03em;
   color: var(--accent-text);
+  /* skewX is inert on an inline box, and the negative angle leans the tops right,
+     which is the direction real italics lean. */
+  display: inline-block;
+  transform: skewX(-9deg);
+  /* The shear pushes the last glyph right and the descenders left; reserve both so a
+     sheared 'g' or 'y' never collides with the line beneath at leading 0.96. The
+     emphasis word is admin-editable, so it will not always be a descender-free one. */
+  padding: 0 0.08em 0.06em 0;
+  margin-bottom: -0.06em;
 }
 .mk .label { text-transform: uppercase; letter-spacing: 0.2em; font-size: 11px; font-weight: 600; color: var(--faint); }
 .mk .wrap { max-width: 1280px; margin: 0 auto; padding: 0 clamp(20px, 5vw, 68px); }
