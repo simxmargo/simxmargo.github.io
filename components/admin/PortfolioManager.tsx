@@ -122,7 +122,6 @@ export function PortfolioManager() {
   const [loadError, setLoadError] = useState<string | null>(null)
   const [editing, setEditing] = useState<BrandForm | null>(null)
   const [editorNonce, setEditorNonce] = useState(0)
-  const [serviceKeyMissing, setServiceKeyMissing] = useState(false)
   const [savedAt, setSavedAt] = useState<number | null>(null)
   const [deleting, setDeleting] = useState<{ id: string; brand: string } | null>(null)
   const [deleteBusy, setDeleteBusy] = useState(false)
@@ -147,7 +146,6 @@ export function PortfolioManager() {
   )
 
   const handleSaved = useCallback(async () => {
-    setServiceKeyMissing(false)
     setEditing(null)
     setSavedAt(Date.now())
     await invalidateBrands()
@@ -156,7 +154,6 @@ export function PortfolioManager() {
   async function confirmDelete() {
     if (!deleting) return
     setDeleteBusy(true)
-    setServiceKeyMissing(false)
     try {
       await deleteBrand(deleting.id)
       setSavedAt(Date.now())
@@ -184,7 +181,6 @@ export function PortfolioManager() {
     })
     setBrands(next)
     qc.setQueryData(adminKeys.brands, next)
-    setServiceKeyMissing(false)
     try {
       await reorderBrands(order)
     } catch (err) {
@@ -239,7 +235,6 @@ export function PortfolioManager() {
   // Show/hide a brand on the public page (is_visible). Hidden brands stay in the lane
   // (dimmed, with a HIDDEN chip) so you can bring them back.
   async function toggleVisible(b: AdminBrand) {
-    setServiceKeyMissing(false)
     try {
       await updateBrand(b.id, { isVisible: !b.isVisible })
       setSavedAt(Date.now())
@@ -293,12 +288,6 @@ export function PortfolioManager() {
       </header>
 
       <div className="stack stack-wide">
-        {serviceKeyMissing && (
-          <div className="banner banner-warn">
-            <AlertTriangle size={18} aria-hidden="true" />
-            <span>Saving needs SUPABASE_SERVICE_ROLE_KEY set on the server.</span>
-          </div>
-        )}
         {savedAt && (
           <div className="save-ok">
             <Check size={16} aria-hidden="true" /> Saved
@@ -351,7 +340,6 @@ export function PortfolioManager() {
           key={editorNonce}
           initial={editing}
           onCancel={() => setEditing(null)}
-          on503={() => setServiceKeyMissing(true)}
           onSaved={handleSaved}
           onRequestDelete={(d) => setDeleting(d)}
         />
@@ -373,7 +361,6 @@ export function PortfolioManager() {
             setSavedAt(Date.now())
             void invalidateBrands()
           }}
-          on503={() => setServiceKeyMissing(true)}
         />
       )}
     </>
@@ -549,13 +536,11 @@ function BrandEditorModal({
   initial,
   onCancel,
   onSaved,
-  on503,
   onRequestDelete,
 }: {
   initial: BrandForm
   onCancel: () => void
   onSaved: () => void | Promise<void>
-  on503: () => void
   onRequestDelete: (d: { id: string; brand: string }) => void
 }) {
   const [form, setForm] = useState<BrandForm>(initial)

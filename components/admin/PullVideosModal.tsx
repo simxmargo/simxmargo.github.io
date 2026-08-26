@@ -14,6 +14,8 @@ import { formatCount, type BrandMedia } from '@/lib/mediakit-types'
 // list (matched per-brand + an "Unmatched" group), tweaks the per-video brand, then on
 // Add we append the chosen videos to each brand's portfolio_brands.media via updateBrand
 // (direct supabase, RLS = is_admin()). The function never writes — the browser persists.
+// "Pull older posts" continues from the function's `nextCursor`, appending deeper
+// back-catalog to the list under review instead of re-reading the newest posts.
 
 // One video returned by the `pull-videos` function (mirrors its response contract).
 interface PulledVideo {
@@ -46,7 +48,6 @@ export function PullVideosModal({
   defaultHandle?: string
   onClose: () => void
   onAdded: () => void
-  on503: () => void
 }) {
   const panelRef = useRef<HTMLDivElement>(null)
   useDialog(panelRef, onClose)
@@ -58,11 +59,20 @@ export function PullVideosModal({
   const [error, setError] = useState<string | null>(null)
   const [note, setNote] = useState<string | null>(null)
   const [rows, setRows] = useState<ReviewRow[]>([])
+  // Resume point for "Pull older posts". Carries the platform+handle it belongs to
+  // rather than being reset by every change EVENT — retyping the same handle used to
+  // throw away a valid cursor, and the only way back was a fresh 2-credit pull.
+  const [resume, setResume] = useState<{ platform: string; handle: string; cursor: string } | null>(null)
+  const nextCursor =
+    resume && resume.platform === platform && resume.handle === handle.trim() ? resume.cursor : null
 
   const brandName = useMemo(() => new Map(brands.map((b) => [b.id, b.brand])), [brands])
 
   // Selected = included AND assigned to a brand (unmatched-unassigned can't be saved).
   const selectedCount = rows.filter((r) => r.include && r.brandId).length
+  // Checked but brandless rows are silently skipped on Add — surface the count so
+  // "12 pulled" quietly becoming "3 saved" stops being a mystery.
+  const unmatchedSelected = rows.filter((r) => r.include && !r.brandId).length
 
   // Group the review rows by assigned brand: each brand that has rows (in the brands'
   // own display order) becomes a group, then the Unmatched group last.
@@ -77,7 +87,9 @@ export function PullVideosModal({
     return out
   }, [rows, brands])
 
-  async function pull() {
+  // A fresh pull replaces the review list; a `cursor` continuation appends older posts
+  // below what's already under review (deduped by video id).
+  async function pull(cursor?: string) {
     const sb = supabaseBrowser
     if (!sb) {
       setError('Studio is not configured.')
@@ -91,27 +103,35 @@ export function PullVideosModal({
     setLoading(true)
     setError(null)
     setNote(null)
-    setRows([])
+    if (!cursor) {
+      setRows([])
+      setResume(null)
+    }
     try {
       const { data, error: invokeErr } = await sb.functions.invoke('pull-videos', {
-        body: { platform, handle: h },
+        body: cursor ? { platform, handle: h, cursor } : { platform, handle: h },
       })
       if (invokeErr) {
         setError(await fnErrorMessage(invokeErr, 'Could not pull videos.'))
         return
       }
+      const nc = typeof data?.nextCursor === 'string' && data.nextCursor ? data.nextCursor : null
+      setResume(nc ? { platform, handle: h, cursor: nc } : null)
       const vids: PulledVideo[] = Array.isArray(data?.videos) ? data.videos : []
       if (vids.length === 0) {
         setNote(typeof data?.note === 'string' ? data.note : 'No posts found for that handle.')
         return
       }
-      setRows(
-        vids.map((v) => ({
-          ...v,
-          brandId: v.suggestedBrandId ?? UNMATCHED,
-          include: true,
-        })),
-      )
+      const mapped: ReviewRow[] = vids.map((v) => ({
+        ...v,
+        brandId: v.suggestedBrandId ?? UNMATCHED,
+        include: true,
+      }))
+      setRows((prev) => {
+        if (!cursor) return mapped
+        const have = new Set(prev.map((r) => r.id))
+        return [...prev, ...mapped.filter((r) => !have.has(r.id))]
+      })
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not pull videos.')
     } finally {
@@ -144,13 +164,56 @@ export function PullVideosModal({
     }
     setSaving(true)
     setError(null)
+    let wrote = 0
+    let skipped = 0
     try {
-      for (const [bid, newMedia] of byBrand) {
-        const brand = brands.find((b) => b.id === bid)
-        const existing = Array.isArray(brand?.media) ? brand.media : []
-        // Append (existing first): updateBrand→sanitizeMedia caps the array at 12, so any
-        // new items beyond 12 for an already-full brand are dropped (same as the editor).
-        await updateBrand(bid, { media: [...existing, ...newMedia] })
+      const results = await Promise.allSettled(
+        [...byBrand].map(async ([bid, newMedia]) => {
+          const brand = brands.find((b) => b.id === bid)
+          // Legacy rows can hold nulls: sanitizeMedia only runs on WRITE, and mapBrand
+          // passes an existing array through untouched.
+          const existing = (Array.isArray(brand?.media) ? brand.media : []).filter(
+            (m): m is BrandMedia => Boolean(m) && typeof m?.url === 'string',
+          )
+          // Append only what the brand doesn't already hold (by url) — re-pulling the
+          // same handle used to append the same videos as duplicates. The seen-set grows
+          // as we go, so two pulled rows sharing a permalink can't both land either.
+          // sanitizeMedia has no item-count cap, so everything new is kept.
+          const have = new Set(existing.map((m) => m.url))
+          const fresh: BrandMedia[] = []
+          for (const m of newMedia) {
+            if (have.has(m.url)) continue
+            have.add(m.url)
+            fresh.push(m)
+          }
+          if (fresh.length === 0) {
+            skipped += newMedia.length
+            return
+          }
+          await updateBrand(bid, { media: [...existing, ...fresh] })
+          wrote += fresh.length
+        }),
+      )
+
+      const failed = results.filter((r) => r.status === 'rejected')
+      if (failed.length > 0) {
+        // Some brands may have been written. Refresh before the admin retries, or the
+        // dedup below would run against a stale `brands` prop and duplicate them.
+        onAdded()
+        const first = failed[0] as PromiseRejectedResult
+        setError(
+          `Saved ${wrote} video${wrote === 1 ? '' : 's'}, but ${failed.length} brand${
+            failed.length === 1 ? '' : 's'
+          } failed: ${first.reason instanceof Error ? first.reason.message : 'unknown error'}`,
+        )
+        return
+      }
+
+      // Nothing written is not a success. Every video already being on the brand is the
+      // normal outcome of a re-pull, so say that rather than flashing "Saved".
+      if (wrote === 0) {
+        setError(`Nothing to add — all ${skipped} selected video${skipped === 1 ? ' is' : 's are'} already on their brands.`)
+        return
       }
       onAdded()
       onClose()
@@ -232,8 +295,9 @@ export function PullVideosModal({
             </button>
           </div>
           <p className="field-hint">
-            Fetches the creator&rsquo;s recent posts (up to 12), re-hosts each cover, and auto-matches them to your
-            brands by caption. Review the matches below, then add the ones you want.
+            Fetches the creator&rsquo;s recent posts (about two pages per pull), re-hosts each cover, and auto-matches
+            them to your brands by caption. Review the matches below, then add the ones you want —
+            &ldquo;Pull older posts&rdquo; continues further back through the profile.
           </p>
 
           {note && (
@@ -245,8 +309,13 @@ export function PullVideosModal({
 
           {rows.length > 0 && (
             <>
-              <div className="pv-summary">
+              {/* Live: the unmatched count explains why Add is disabled, and a screen
+                  reader ticking a brandless row hears nothing change otherwise. */}
+              <div className="pv-summary" aria-live="polite">
                 {rows.length} {rows.length === 1 ? 'video' : 'videos'} · {selectedCount} selected
+                {unmatchedSelected > 0
+                  ? ` · ${unmatchedSelected} unmatched — pick a brand to include them`
+                  : ''}
               </div>
               {groups.map((g) => (
                 <div key={g.id || 'unmatched'} className="pv-group">
@@ -295,6 +364,21 @@ export function PullVideosModal({
                 </div>
               ))}
             </>
+          )}
+
+          {/* Outside the rows block on purpose: a continuation can exist even when a
+              page mapped to zero saveable videos, and the way past it is pulling on. */}
+          {nextCursor && (
+            <button
+              type="button"
+              className="btn btn-ghost"
+              style={{ alignSelf: 'center' }}
+              onClick={() => void pull(nextCursor)}
+              disabled={loading || saving}
+            >
+              {loading ? <Loader2 size={16} className="animate-spin" aria-hidden="true" /> : <Download size={16} aria-hidden="true" />}
+              {loading ? 'Pulling…' : 'Pull older posts'}
+            </button>
           )}
         </div>
 

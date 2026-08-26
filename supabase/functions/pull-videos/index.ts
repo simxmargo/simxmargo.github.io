@@ -5,8 +5,9 @@
 //      Authorization header and `rpc('is_admin')`. NEVER trust the client; 403 if false.
 //   2. Fetch a creator's OWN recent posts by handle via the ScrapeCreators managed API
 //      (a plain server fetch of TikTok only ever returns the SlardarWAF JS-challenge
-//      shell — the wall is JS execution, not auth). Capped to MAX_ITEMS to bound credit
-//      spend (ScrapeCreators bills 1 credit per page).
+//      shell — the wall is JS execution, not auth). Cost is bounded by MAX_PAGES
+//      (ScrapeCreators bills 1 credit per page); a `cursor` from a previous call
+//      continues deeper into the back catalog instead of re-reading the newest posts.
 //   3. Re-host each cover to the public `media` bucket (TikTok/IG covers carry a ~6h TTL
 //      and expire) with a service-role client → a PERMANENT public URL.
 //   4. Auto-match each video to a managed brand by scanning its caption for the brand
@@ -34,8 +35,17 @@ interface RawVideo {
   platform: 'tiktok' | 'instagram'
 }
 
+/** One reviewable row: the raw post plus its permanent cover and matched brand. */
+interface PulledVideo extends Omit<RawVideo, 'cover'> {
+  cover: string
+  suggestedBrandId: string | null
+  suggestedBrand: string | null
+}
+
 interface PullResult {
   videos: RawVideo[]
+  /** Resume point for a follow-up pull when the profile has more history; null = end. */
+  nextCursor: string | null
   note?: string // soft "nothing found" (HTTP 200)
   error?: string // hard failure
   status: number // HTTP status to return
@@ -43,11 +53,11 @@ interface PullResult {
 
 const SC_BASE = 'https://api.scrapecreators.com'
 const SC_TIMEOUT = 20_000
-// Cap the pull HARD: ScrapeCreators bills 1 credit/page, so few pages = low spend, and a
-// short review list is friendlier than a prolific creator's whole back-catalog. 1–2 pages
-// (TikTok ~30/page, IG ~12/page) comfortably fills MAX_ITEMS.
+// MAX_PAGES is the ONLY cost lever: ScrapeCreators bills 1 credit per page, so one pull
+// costs at most 2 credits. Everything a paid page returned is KEPT — an item cap below
+// the page boundary just discarded videos the credit had already bought (~30/page on
+// TikTok, ~12 on IG). Deeper history is reached by pulling again with `nextCursor`.
 const MAX_PAGES = 2
-const MAX_ITEMS = 12
 
 const scNum = (v: unknown): number | null =>
   typeof v === 'number' && Number.isFinite(v) ? v : typeof v === 'string' && /^\d+$/.test(v) ? Number(v) : null
@@ -127,13 +137,20 @@ function pageUrl(platform: 'tiktok' | 'instagram', h: string, cursor: string | n
   return `${SC_BASE}/v2/instagram/user/posts?handle=${eh}${cursor ? `&next_max_id=${encodeURIComponent(cursor)}` : ''}`
 }
 
-// Page through a handle's recent posts (dedup by id) and normalize to RawVideo. Returns
-// whatever paged successfully if a later page fails (partial > nothing).
-async function fetchProfilePosts(platform: 'tiktok' | 'instagram', handle: string): Promise<PullResult> {
+// Page through a handle's posts (dedup by id) and normalize to RawVideo, starting from
+// `startCursor` when a previous pull handed one back. Returns whatever paged
+// successfully if a later page fails (partial > nothing), with `nextCursor` pointing at
+// the page a follow-up pull should fetch next.
+async function fetchProfilePosts(
+  platform: 'tiktok' | 'instagram',
+  handle: string,
+  startCursor: string | null,
+): Promise<PullResult> {
   const key = Deno.env.get('SCRAPECREATORS_API_KEY')?.trim()
   if (!key) {
     return {
       videos: [],
+      nextCursor: null,
       status: 503,
       error:
         'ScrapeCreators API key not configured. Set SCRAPECREATORS_API_KEY as an Edge Function secret (free key at scrapecreators.com).',
@@ -144,7 +161,10 @@ async function fetchProfilePosts(platform: 'tiktok' | 'instagram', handle: strin
 
   const seen = new Set<string>()
   const all: RawVideo[] = []
-  let cursor: string | null = null
+  let cursor: string | null = startCursor
+  // After each successful page this points at the NEXT unfetched page, so a mid-run
+  // failure hands back a resume point rather than losing the position.
+  let nextCursor: string | null = startCursor
 
   for (let page = 0; page < MAX_PAGES; page++) {
     let res: Response
@@ -153,21 +173,8 @@ async function fetchProfilePosts(platform: 'tiktok' | 'instagram', handle: strin
     } catch (e) {
       if (all.length > 0) break // keep the pages we already have
       const timedOut = e instanceof Error && e.name === 'TimeoutError'
-      return { videos: [], status: 502, error: timedOut ? 'ScrapeCreators request timed out.' : 'Could not reach ScrapeCreators.' }
-    }
-    if (!res.ok) {
-      if (all.length > 0) break
-      const hint =
-        res.status === 401 || res.status === 403
-          ? ' API key rejected.'
-          : res.status === 402
-            ? ' Out of ScrapeCreators credits.'
-            : res.status === 404
-              ? ` Handle @${h} not found.`
-              : res.status === 429
-                ? ' Rate limited — try again shortly.'
-                : ''
-      return { videos: [], status: 502, error: `ScrapeCreators error (HTTP ${res.status}).${hint}` }
+      // Hand the resume point back: the position is still valid, only this page failed.
+      return { videos: [], nextCursor: startCursor, status: 502, error: timedOut ? 'ScrapeCreators request timed out.' : 'Could not reach ScrapeCreators.' }
     }
 
     let j: unknown = null
@@ -176,6 +183,64 @@ async function fetchProfilePosts(platform: 'tiktok' | 'instagram', handle: strin
     } catch {
       j = null
     }
+    const body = j as
+      | { aweme_list?: unknown; items?: unknown; success?: unknown; account_deactivated?: unknown; message?: unknown }
+      | null
+
+    // A handle that does not exist (or was deactivated) answers 404 with an error body —
+    // measured 2026-08-26, both platforms. That is the ADMIN's typo, not a vendor
+    // outage, so it gets the soft note it used to get, not "ScrapeCreators error".
+    if (res.status === 404) {
+      if (all.length > 0) break
+      return {
+        videos: [],
+        nextCursor: null,
+        status: 200,
+        note: body?.account_deactivated
+          ? `@${h} looks deactivated on ${platform === 'tiktok' ? 'TikTok' : 'Instagram'}.`
+          : `No posts found for @${h}. Double-check the handle.`,
+      }
+    }
+
+    if (!res.ok) {
+      if (all.length > 0) break
+      const hint =
+        res.status === 401 || res.status === 403
+          ? ' API key rejected.'
+          : res.status === 402
+            ? ' Out of ScrapeCreators credits.'
+            : res.status === 429
+              ? ' Rate limited — try again shortly.'
+              : ''
+      return { videos: [], nextCursor: startCursor, status: 502, error: `ScrapeCreators error (HTTP ${res.status}).${hint}` }
+    }
+
+    // Schema-drift guard. A 200 that carries no list container is the API changing shape
+    // (or an error page served as 200) — verified 2026-08-26 that the real "nothing to
+    // return" cases do NOT look like this: a missing or deactivated handle answers 404
+    // (handled above) and a live profile's 200 always carries the container. `success:
+    // false` is the API's own graceful-failure flag, so that stays a soft note rather
+    // than an accusation that the vendor broke.
+    const container = platform === 'tiktok' ? body?.aweme_list : body?.items
+    if (!Array.isArray(container)) {
+      if (all.length > 0) break // keep what earlier pages already paid for
+      if (body?.success === false) {
+        return {
+          videos: [],
+          nextCursor: null,
+          status: 200,
+          note: typeof body.message === 'string' && body.message
+            ? `ScrapeCreators could not read @${h}: ${body.message}`
+            : `No posts found for @${h}. Double-check the handle.`,
+        }
+      }
+      return {
+        videos: [],
+        nextCursor: startCursor,
+        status: 502,
+        error: 'ScrapeCreators returned an unexpected response shape — the API may have changed or is degraded. Try again shortly.',
+      }
+    }
     const pageVids = platform === 'tiktok' ? mapTikTok(j, h) : mapInstagram(j)
     for (const v of pageVids) {
       if (seen.has(v.id)) continue
@@ -183,14 +248,24 @@ async function fetchProfilePosts(platform: 'tiktok' | 'instagram', handle: strin
       all.push(v)
     }
     const { hasMore, cursor: next } = pageCursor(platform, j)
-    if (!hasMore || !next || pageVids.length === 0 || all.length >= MAX_ITEMS) break
-    cursor = next
+    nextCursor = hasMore && next ? next : null
+    if (!nextCursor || pageVids.length === 0) break
+    cursor = nextCursor
   }
 
   if (all.length === 0) {
-    return { videos: [], status: 200, note: `No posts found for @${h}. Double-check the handle.` }
+    // A FRESH pull that found nothing gets no resume point, even when the API offered
+    // one: "double-check the handle" beside a "Pull older posts" button is two pieces of
+    // advice that contradict each other, and every click of it spends real credits.
+    // A continuation keeps its cursor — paging past a barren stretch is normal.
+    return {
+      videos: [],
+      nextCursor: startCursor ? nextCursor : null,
+      status: 200,
+      note: startCursor ? `No further posts found for @${h}.` : `No posts found for @${h}. Double-check the handle.`,
+    }
   }
-  return { videos: all.slice(0, MAX_ITEMS), status: 200 }
+  return { videos: all, nextCursor, status: 200 }
 }
 
 // ── Cover re-host (ported from lib/social/rehost.ts → Deno) ──────────────────────────
@@ -386,11 +461,26 @@ Deno.serve(async (req) => {
   if (!platform) return json({ error: 'platform must be "tiktok" or "instagram".' }, 400)
   const handle = cleanHandle(String(body?.handle ?? ''))
   if (!handle) return json({ error: 'Enter a handle or profile URL.' }, 400)
+  // Optional resume point from a previous pull's `nextCursor`. Opaque to us, so the
+  // ceiling is only a sanity bound — Instagram's next_max_id carries a pagination blob
+  // that can run long. REJECTED rather than ignored past it: silently nulling a cursor
+  // the client sent answers a different question, re-fetching the newest page for two
+  // credits and handing back posts the caller already has.
+  const rawCursor = body?.cursor
+  if (rawCursor !== undefined && rawCursor !== null && typeof rawCursor !== 'string') {
+    return json({ error: 'cursor must be a string.' }, 400)
+  }
+  if (typeof rawCursor === 'string' && rawCursor.length > 4000) {
+    return json({ error: 'cursor is not a valid resume point.' }, 400)
+  }
+  const cursor = typeof rawCursor === 'string' && rawCursor.length > 0 ? rawCursor : null
 
-  // 3) Fetch the creator's recent posts (capped).
-  const pulled = await fetchProfilePosts(platform, handle)
+  // 3) Fetch the creator's posts (cost-capped by MAX_PAGES per call).
+  const pulled = await fetchProfilePosts(platform, handle, cursor)
   if (pulled.error) return json({ error: pulled.error }, pulled.status)
-  if (pulled.videos.length === 0) return json({ videos: [], note: pulled.note ?? 'No posts found.' }, 200)
+  if (pulled.videos.length === 0) {
+    return json({ videos: [], nextCursor: pulled.nextCursor, note: pulled.note ?? 'No posts found.' }, 200)
+  }
 
   // 4) Service-role client for re-hosting + reading the brand list (both bypass RLS;
   //    the admin check above is the gate).
@@ -406,12 +496,28 @@ Deno.serve(async (req) => {
   }))
   const brandById = new Map(brands.map((b) => [b.id, b]))
 
-  // 5) Re-host every cover to a permanent URL (parallel), then auto-match by caption.
-  const videos = await Promise.all(
-    pulled.videos.map(async (v) => {
+  // 5) Re-host every cover to a permanent URL, then auto-match by caption.
+  //
+  // Bounded, not a bare Promise.all over the whole batch. Each re-host buffers up to
+  // THUMB_MAX (5MB) and pushes it to Storage, so when the item cap went away this
+  // fan-out silently went with it: ~60 covers at once on a 256MB worker is an OOM and a
+  // burst Storage throttles. A throttled cover falls back to the raw CDN url, which
+  // expires in ~6h and then 404s on the live media kit forever — so the failure this
+  // bound prevents is permanent and invisible.
+  const REHOST_CONCURRENCY = 5
+  const out: PulledVideo[] = new Array(pulled.videos.length)
+  let cursorIdx = 0
+  let expiringCovers = 0
+
+  const rehostWorker = async (): Promise<void> => {
+    while (true) {
+      const i = cursorIdx++
+      if (i >= pulled.videos.length) return
+      const v = pulled.videos[i]
       const rehosted = v.cover ? await rehostImage(service, v.cover) : ''
+      if (v.cover && !rehosted) expiringCovers++
       const suggestedBrandId = matchCaption(v.caption, brands)[0] ?? null
-      return {
+      out[i] = {
         id: v.id,
         url: v.url,
         cover: rehosted || v.cover, // permanent URL, or the raw (expiring) cover as a fallback
@@ -422,8 +528,20 @@ Deno.serve(async (req) => {
         suggestedBrandId,
         suggestedBrand: suggestedBrandId ? brandById.get(suggestedBrandId)?.brand ?? null : null,
       }
-    }),
-  )
+    }
+  }
+  await Promise.all(Array.from({ length: REHOST_CONCURRENCY }, rehostWorker))
 
-  return json({ videos }, 200)
+  return json(
+    {
+      videos: out,
+      nextCursor: pulled.nextCursor,
+      // Say it rather than let it rot: these covers point at CDN urls that expire in
+      // hours, so the admin can re-pull instead of discovering blank tiles next week.
+      note: expiringCovers > 0
+        ? `${expiringCovers} cover${expiringCovers === 1 ? '' : 's'} could not be saved to permanent storage and will expire — re-pull to try again.`
+        : undefined,
+    },
+    200,
+  )
 })
