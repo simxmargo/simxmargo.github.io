@@ -46,10 +46,22 @@ const WIKIDATA = 'https://query.wikidata.org/sparql'
 // with a browser UA — that is exactly what their policy forbids.
 const UA = 'brand-outreach-studio/1.0 (+https://simxmargo.github.io) brand-discovery'
 const MAX_LIMIT = 200
-// One search costs 1 credit and yields ~5 brands after filtering, so a 100-brand batch
-// costs ~20. The cap keeps a single run from ever eating a large slice of the balance.
-// This is the COST ceiling; the deadline below is what bounds the wall clock.
-const MAX_SEARCHES = 30
+// TWO ceilings, because they bound different things and one cannot stand in for the
+// other. The COST ceiling counts CREDITS ACTUALLY CHARGED: the API charges 0 for a
+// search that matches nothing (HTTP 404) and most compound framings in the pool match
+// nothing, so the old request-counting cap spent its 30 on ~27 free empties and stopped
+// after ~3 productive searches (2026-08-26).
+const MAX_SEARCH_CREDITS = 30
+// The REQUEST ceiling is what keeps that from becoming unlimited traffic. Free empties
+// answer in ~2s, so credits alone would let four workers fire ~150 requests in one
+// Instagram slice — at a shared key whose throttling would break `pull-videos` and the
+// media kit, not just this run (see SEARCH_CONCURRENCY below). Generous enough to walk
+// a long stretch of quiet niches, bounded enough to stay a good citizen.
+const MAX_SEARCH_REQUESTS = 120
+// Brave is metered PER REQUEST on a ~2,000/month free plan — no free empties — so it
+// gets its own number rather than borrowing the ScrapeCreators credit cap it has
+// nothing to do with.
+const MAX_BRAVE_REQUESTS = 30
 
 // ── THE WALL CLOCK ──────────────────────────────────────────────────────────────
 //
@@ -67,15 +79,17 @@ const MAX_SEARCHES = 30
 // So the run is bounded by TIME now, and always answers with whatever it has.
 const WALL_CLOCK_MS = 150_000
 // Room to write the ready contacts, serialize, and absorb one in-flight search that
-// started just before its deadline (worst case SC_TIMEOUT, 9s).
-const SAFETY_MS = 25_000
+// started just before its deadline. A search is now up to TWO attempts (15s + a
+// jittered pause + 15s ≈ 31s), so 25s no longer covered the worst case and a worker
+// that just passed the loop head could carry the run past the 150s kill.
+const SAFETY_MS = 35_000
 const BUDGET_MS = WALL_CLOCK_MS - SAFETY_MS
 // Instagram is the best source, so it gets the bulk — but it must leave the fallbacks
 // enough time to be more than decoration.
 const INSTAGRAM_SHARE = 0.6
 
 // ScrapeCreators answers a search in 10-20s and has no published rate limit. Four in
-// flight turns a 75s slice into ~20 searches instead of ~4. Kept deliberately low: the
+// flight turns a 75s slice into ~20 searches instead of ~5. Kept deliberately low: the
 // same key powers `pull-videos` and `fetch-post`, and getting it throttled would break
 // the media kit, not just this run.
 const SEARCH_CONCURRENCY = 4
@@ -152,15 +166,20 @@ async function viaInstagram(
 ) {
   const pool = queryPool(extraNiches)
   // Start somewhere random so consecutive runs explore different niches rather than
-  // grinding the same first query every time.
+  // grinding the same first query every time. The whole pool is in reach — the credit
+  // budget and the deadline decide where a run actually stops, not the list length.
   const start = Math.floor(Math.random() * pool.length)
-  const queries = Array.from({ length: MAX_SEARCHES }, (_, i) => pool[(start + i) % pool.length])
+  const queries = Array.from({ length: pool.length }, (_, i) => pool[(start + i) % pool.length])
 
   const fresh = new Map<string, BrandCandidate>()
   const used: string[] = []
   let screened = 0
+  let emptySearches = 0
+  let creditsSpent = 0
+  let requests = 0
   let outOfCredits = false
   let creditsRemaining: number | null = null
+  const failures = { timeout: 0, http: 0, network: 0 }
   let cursor = 0
   let stop = false
 
@@ -169,20 +188,35 @@ async function viaInstagram(
   // three siblings keep spending it.
   const worker = async (): Promise<void> => {
     while (!stop) {
-      if (Date.now() >= deadline || fresh.size >= limit) {
+      if (
+        Date.now() >= deadline ||
+        fresh.size >= limit ||
+        creditsSpent >= MAX_SEARCH_CREDITS ||
+        requests >= MAX_SEARCH_REQUESTS
+      ) {
         stop = true
         return
       }
       const i = cursor++
       if (i >= queries.length) return
 
+      requests++
       const outcome = await searchProfiles(apiKey, queries[i])
 
+      // Before the counters: a 402 was never billed and says nothing about the niche,
+      // so counting it as either a credit or a quiet niche is the exact collapse the
+      // outcome type exists to prevent.
       if (outcome.outOfCredits) {
         outOfCredits = true
+        creditsRemaining = outcome.creditsRemaining ?? creditsRemaining
         stop = true
         return
       }
+
+      // A failure's charge is unknowable (no body came back) — budget it as 1 so a
+      // misbehaving API can't turn "unknown cost" into unmetered spend.
+      creditsSpent += outcome.creditsCharged ?? 1
+      if (outcome.profiles.length === 0 && !outcome.failure) emptySearches++
       if (outcome.creditsRemaining !== null) {
         creditsRemaining = outcome.creditsRemaining
         if (creditsRemaining <= MIN_CREDITS) {
@@ -192,10 +226,13 @@ async function viaInstagram(
         }
       }
 
+      if (outcome.failure) failures[outcome.failure]++
+
       used.push(queries[i])
       screened += outcome.profiles.length
+      // Every profile from a search that ANSWERED is screened — the credit is already
+      // spent, so `limit` stops new searches (the loop head), never returned results.
       for (const p of outcome.profiles) {
-        if (fresh.size >= limit) break
         const c = toCandidate(p)
         if (!c) continue // a creator, an event, or no own site to pitch
         if (known.has(c.website) || fresh.has(c.website)) continue
@@ -214,12 +251,18 @@ async function viaInstagram(
   return {
     candidates,
     // Instagram has no countable pool; report the cost so the credit balance is never
-    // a mystery.
+    // a mystery. `searches` counts requests; `creditsSpent` counts what they charged —
+    // empty niches are free, so the two can differ a lot.
     searches: used.length,
+    creditsSpent,
+    emptySearches,
     screened,
     queries: used,
     creditsRemaining,
     outOfCredits,
+    // Failed searches burnt time (and likely a credit) without answering — reported so
+    // a throttled API stops reading as a run of empty niches.
+    searchFailures: failures,
     timedOut: Date.now() >= deadline,
     wantsCreators: candidates.filter((c) => c.wantsCreators).length,
     source: 'instagram' as const,
@@ -235,16 +278,18 @@ async function viaBrave(apiKey: string, known: Set<string>, limit: number, deadl
   const used: string[] = []
 
   // Stays SEQUENTIAL: Brave's free plan is ~1 request/second and concurrency here buys
-  // a 429, not speed. The deadline is what keeps it bounded.
-  for (let i = 0; i < pool.length && fresh.size < limit && used.length < MAX_SEARCHES; i++) {
+  // a 429, not speed. The deadline is what keeps it bounded. Brave meters per REQUEST
+  // (no free empties like ScrapeCreators), so the request count is the credit count.
+  for (let i = 0; i < pool.length && fresh.size < limit && used.length < MAX_BRAVE_REQUESTS; i++) {
     if (Date.now() >= deadline) break
     if (i > 0) await new Promise((r) => setTimeout(r, 1100))
     const query = pool[(start + i) % pool.length]
     // Page deeper as we go so repeated runs reach past the first page of results.
     const hits = await braveDiscover(apiKey, query, i % 4)
     used.push(query)
+    // Keep every hit an issued query returned — the quota is spent either way; `limit`
+    // only stops the loop from issuing MORE queries.
     for (const h of hits) {
-      if (fresh.size >= limit) break
       if (known.has(h.website) || fresh.has(h.website)) continue
       fresh.set(h.website, h)
     }
@@ -422,11 +467,13 @@ Deno.serve(async (req) => {
   const ranOutOfTime = (
     out: Record<string, unknown> & { candidates: BrandCandidate[] },
     tried: string,
+    extra = '',
   ) =>
     reply(
       out,
       `Stopped at the ${Math.round(budgetMs / 1000)}s time budget after ${tried}. ` +
-        `Instagram search is slow right now, so this batch is smaller than usual — run it again for more.`,
+        `Instagram search is slow right now, so this batch is smaller than usual — run it again for more.` +
+        (extra ? ` ${extra}` : ''),
     )
 
   // 1. Instagram, while there are credits and time for it. `preferFree` skips it
@@ -434,10 +481,21 @@ Deno.serve(async (req) => {
   //    would rather have lower-yield candidates than none.
   if (scKey && !preferFree) {
     const out = await viaInstagram(scKey, known, limit, igDeadline, extraNiches)
+    // Failed searches are not quiet niches — say so, or a throttled API reads as a
+    // market that has nothing left to find.
+    const failedCount = out.searchFailures.timeout + out.searchFailures.http + out.searchFailures.network
+    const failNote =
+      failedCount > 0
+        ? `${failedCount} of ${out.searches} Instagram search${out.searches === 1 ? '' : 'es'} failed ` +
+          `(${out.searchFailures.timeout} timed out, ${out.searchFailures.http + out.searchFailures.network} errored) — ` +
+          // No "run it again" here: the timed-out branch below already ends with that
+          // line, and a run that both ran long and had a failure showed it twice.
+          `the API was slow or throttled, so those niches went unread.`
+        : ''
     if (out.candidates.length > 0 && !out.outOfCredits) {
       return out.timedOut
-        ? ranOutOfTime(out, `${out.searches} Instagram search${out.searches === 1 ? '' : 'es'}`)
-        : reply(out)
+        ? ranOutOfTime(out, `${out.searches} Instagram search${out.searches === 1 ? '' : 'es'}`, failNote)
+        : reply(out, failNote)
     }
 
     // 2. Out of credits (or it found nothing) → the web index, with whatever is left.
@@ -447,13 +505,33 @@ Deno.serve(async (req) => {
       const brave = await viaBrave(braveKey, known, limit, deadline - 12_000)
       const why = out.outOfCredits
         ? `ScrapeCreators credits are spent${out.creditsRemaining !== null ? ` (${out.creditsRemaining} left, reserve is ${MIN_CREDITS})` : ''} — discovered via Brave search instead.`
-        : 'Instagram search returned nothing this run — discovered via Brave search instead.'
-      // Anything Instagram did manage to find before stopping still counts.
+        : `Instagram search returned nothing this run${failedCount > 0 ? ` (${failedCount} of ${out.searches} searches failed — slow or throttled API, not empty niches)` : ''} — discovered via Brave search instead.`
+      // Anything Instagram did manage to find before stopping still counts — and it is
+      // all kept: both sources already paid for these, so nothing is sliced away.
       if (out.candidates.length > 0) {
         const merged = [...out.candidates]
         const have = new Set(merged.map((c) => c.website))
         for (const c of brave.candidates) if (!have.has(c.website)) merged.push(c)
-        return reply({ ...brave, candidates: merged.slice(0, limit) }, why)
+        // Two sources, so the per-source stats are NESTED rather than spread flat.
+        // Spreading Brave and then grafting Instagram's failure counts on top produced
+        // one payload claiming `source: 'brave'`, `screened: 0` and "12 of 18 searches
+        // failed" — three numbers from two different runs, none of them comparable.
+        return reply(
+          {
+            source: 'instagram+brave' as const,
+            candidates: merged,
+            screened: out.screened,
+            searches: out.searches + brave.searches,
+            creditsRemaining: out.creditsRemaining,
+            creditsSpent: out.creditsSpent,
+            emptySearches: out.emptySearches,
+            searchFailures: out.searchFailures,
+            outOfCredits: out.outOfCredits,
+            instagram: { searches: out.searches, screened: out.screened, creditsSpent: out.creditsSpent },
+            brave: { searches: brave.searches, screened: brave.screened },
+          },
+          why,
+        )
       }
       if (brave.candidates.length > 0) return reply(brave, why)
     }
@@ -469,7 +547,7 @@ Deno.serve(async (req) => {
     }
 
     // Out of time with whatever we managed to gather. Answer, don't 504.
-    return ranOutOfTime(out, `${out.searches} Instagram search${out.searches === 1 ? '' : 'es'}`)
+    return ranOutOfTime(out, `${out.searches} Instagram search${out.searches === 1 ? '' : 'es'}`, failNote)
   }
 
   if (braveKey) {

@@ -43,7 +43,9 @@ const YIELD_FACTOR = 3
 const DISCOVER_PER_TICK = 40
 
 // The slice of clock handed to discovery. Its own worst case is one in-flight search
-// (~9s) past the deadline, so 60s + overhead sits comfortably inside our 150s.
+// past the deadline — now up to ~31s, since a search gets a second attempt (15s each
+// plus a jittered pause) — so 60s + overhead still sits inside our 150s, with the
+// 25s guard below covering the rest.
 const DISCOVERY_BUDGET_MS = 60_000
 
 const PH_OFFSET_MS = 8 * 60 * 60 * 1000
@@ -111,8 +113,10 @@ async function callDiscovery(
       'x-cron-secret': Deno.env.get('CRON_SECRET') ?? '',
     },
     body: JSON.stringify({ limit, budget_ms: DISCOVERY_BUDGET_MS, prefer_free: preferFree }),
-    // Discovery answers by its own budget; this only guards against a hung socket.
-    signal: AbortSignal.timeout(DISCOVERY_BUDGET_MS + 25_000),
+    // Discovery answers by its own budget; this only guards against a hung socket. The
+    // margin tracks discovery's own SAFETY_MS — at +25s this would have aborted a run
+    // that was about to answer, since one retried search can land ~31s past the budget.
+    signal: AbortSignal.timeout(DISCOVERY_BUDGET_MS + 35_000),
   })
 
   const text = await res.text()
@@ -209,7 +213,10 @@ Deno.serve(async (req: Request): Promise<Response> => {
       seen.add(key)
       return true
     })
-    .slice(0, remaining)
+    // No slice to `remaining` here: the credits for these candidates are already
+    // spent, so every one gets queued. The budget gates what we REQUEST (`want`,
+    // above); when a run over-delivers, today's ledger overshoots and simply stops
+    // further discovery sooner — cheaper than discarding paid-for brands.
     .map((c) => ({ brand: c.brand, website: c.website, country: c.country ?? '' }))
 
   let queued = 0

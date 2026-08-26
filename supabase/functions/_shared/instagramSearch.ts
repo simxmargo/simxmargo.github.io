@@ -18,14 +18,19 @@ import {
   isPlausibleBrandHost,
   squash,
 } from './hosts.ts'
+import { sleep } from './scrape.ts'
 
 const SC_BASE = 'https://api.scrapecreators.com'
-// 9s, not 20s. Measured 2026-08-10: a search answers in 10-20s when the API is warm and
-// hangs to the full timeout when it is not. At 20s a run of 30 searches is 515s against
-// a 150s Edge Function wall clock — which is exactly how discovery started returning 504
-// instead of brands. There are 1,000+ queries in the pool, so a slow one is not worth
-// waiting on: drop it and spend the time on the next.
-const SC_TIMEOUT = 9_000
+// Retry pause, jittered. Four workers share one key, so a fixed delay makes them all
+// come back in lockstep half a second after a 429 — a burst aimed at the very limiter
+// that just pushed back.
+const retryDelayMs = (): number => 400 + Math.floor(Math.random() * 500)
+// 15s. The 9s cut (2026-08-10) fixed a wall-clock blowout but over-corrected: a warm
+// search answers in 10-20s, so 9s aborted searches whose credit was already spent and
+// recorded their niches as empty. 15s keeps most of those answers; the run's DEADLINE
+// in discover-brands (not this timeout) is what protects the 150s wall clock, and
+// SEARCH_CONCURRENCY keeps throughput up despite the longer wait.
+const SC_TIMEOUT = 15_000
 
 export interface BrandCandidate {
   brand: string
@@ -295,45 +300,130 @@ export function classifyProfile(p: RawProfile): number {
   return score
 }
 
+/** Why a search came back empty ABNORMALLY. null = it genuinely answered. */
+export type SearchFailure = 'timeout' | 'http' | 'network' | null
+
 export interface SearchOutcome {
   profiles: RawProfile[]
   /** 402 — the credit balance is spent. The caller must switch source, not retry. */
   outOfCredits: boolean
   /** Balance reported by the API, so a run can say what it cost. */
   creditsRemaining: number | null
+  /**
+   * What this search cost IN TOTAL, from the response's `credits_charged` plus any
+   * attempt that was retried. Load-bearing for the caller's budget: an empty search
+   * charges 0 (measured 2026-08-26), so a run that counted requests instead of credits
+   * stopped ~27 searches early for no spend at all.
+   *
+   * An aborted attempt still counts 1. `AbortSignal.timeout` drops OUR socket; the
+   * search keeps running at ScrapeCreators and bills for it, so a timeout + retry can
+   * cost 2 while reporting the retry's 0-or-1 — which would make the caller's ceiling a
+   * fiction in exactly the slow-API conditions the retry exists for.
+   *
+   * null = nothing came back at all; the caller budgets it pessimistically as 1.
+   */
+  creditsCharged: number | null
+  /**
+   * Set when the request failed rather than answered. Split out for the same reason
+   * 402 is: a timeout or a 429 burnt a credit and said NOTHING about the niche, and
+   * folding it into "0 profiles" made a throttled API read as a string of quiet niches.
+   */
+  failure: SearchFailure
 }
 
 /**
  * One search.
  *
- * Returns an OUTCOME rather than a bare array because "found nothing" and "we are out
- * of credits" need opposite responses — retry the next query, versus stop and fall back
- * to Brave. Collapsing both into `[]` made an exhausted balance look like a quiet niche.
+ * Returns an OUTCOME rather than a bare array because "found nothing", "out of
+ * credits" and "the request failed" need different responses — try the next query,
+ * stop and fall back to Brave, or count the failure so the run can say the API was
+ * slow/throttled. Collapsing them all into `[]` made an exhausted balance (and later
+ * a slow API) look like empty niches.
+ *
+ * Timeouts and 429s get ONE retry after a short pause: both are transient, and a
+ * repeat of the same query is often served from ScrapeCreators' cache (0 credits).
  */
 export async function searchProfiles(apiKey: string, query: string): Promise<SearchOutcome> {
-  const empty = (outOfCredits = false): SearchOutcome => ({
-    profiles: [],
-    outOfCredits,
-    creditsRemaining: null,
-  })
-  try {
-    const res = await fetch(
-      `${SC_BASE}/v1/instagram/search/profiles?query=${encodeURIComponent(query)}`,
-      {
-        headers: { 'x-api-key': apiKey, accept: 'application/json' },
-        signal: AbortSignal.timeout(SC_TIMEOUT),
-      },
-    )
-    if (res.status === 402) return empty(true)
-    if (!res.ok) return empty()
-    const j = await res.json()
+  // Every exit builds its outcome here, so adding a field to SearchOutcome cannot leave
+  // one of the five return paths silently on a stale default.
+  let sunkCredits = 0 // attempts that were abandoned but still billed server-side
+  const outcome = (o: Partial<SearchOutcome>): SearchOutcome => {
+    const seen = o.creditsCharged
     return {
-      profiles: Array.isArray(j?.profiles) ? (j.profiles as RawProfile[]) : [],
+      profiles: [],
       outOfCredits: false,
-      creditsRemaining: typeof j?.credits_remaining === 'number' ? j.credits_remaining : null,
+      creditsRemaining: null,
+      failure: null,
+      ...o,
+      // An unknown charge stays unknown unless an earlier attempt is known to have been
+      // billed; otherwise the sunk attempts are added to what this one reported.
+      creditsCharged: seen == null ? (sunkCredits || null) : seen + sunkCredits,
     }
-  } catch {
-    return empty()
+  }
+
+  for (let attempt = 0; ; attempt++) {
+    let res: Response
+    try {
+      res = await fetch(
+        `${SC_BASE}/v1/instagram/search/profiles?query=${encodeURIComponent(query)}`,
+        {
+          headers: { 'x-api-key': apiKey, accept: 'application/json' },
+          signal: AbortSignal.timeout(SC_TIMEOUT),
+        },
+      )
+    } catch (e) {
+      const timedOut = e instanceof Error && e.name === 'TimeoutError'
+      if (timedOut && attempt === 0) {
+        sunkCredits += 1 // the search we walked away from still ran, and still billed
+        await sleep(retryDelayMs())
+        continue
+      }
+      return outcome({ failure: timedOut ? 'timeout' : 'network' })
+    }
+
+    // Parse BEFORE branching on status: the 402 and 404 bodies both carry
+    // `credits_remaining`, and the balance is exactly what those branches want to report.
+    let body: Record<string, unknown> | null = null
+    try {
+      body = (await res.json()) as Record<string, unknown>
+    } catch {
+      body = null
+    }
+    const creditsRemaining =
+      typeof body?.credits_remaining === 'number' ? body.credits_remaining : null
+    const charged = typeof body?.credits_charged === 'number' ? body.credits_charged : null
+
+    // 402 — the balance is spent. Nothing was billed for this request.
+    if (res.status === 402) {
+      return outcome({ outOfCredits: true, creditsRemaining, creditsCharged: 0 })
+    }
+
+    if (res.status === 429 && attempt === 0) {
+      await sleep(retryDelayMs())
+      continue
+    }
+
+    // 404 is how this API says THIS SEARCH MATCHED NOTHING —
+    // `{"error":"not_found","message":"No profiles found","credits_charged":0}`
+    // (measured 2026-08-26). A legitimate empty niche, free of charge, not a failure;
+    // treating it as one made an ordinary run report "27 of 30 searches failed".
+    // Keyed on the STATUS, not the error string: if that string is ever renamed or
+    // nested, matching it exactly would silently revert the whole credit model AND
+    // report every quiet niche as a broken API.
+    if (res.status === 404) {
+      return outcome({ creditsRemaining, creditsCharged: charged ?? 0 })
+    }
+
+    if (!res.ok || body === null) {
+      // Non-ok we can't explain, or a 200 with an unparseable body — the API misbehaving.
+      return outcome({ creditsRemaining, creditsCharged: charged, failure: 'http' })
+    }
+
+    return outcome({
+      profiles: Array.isArray(body.profiles) ? (body.profiles as RawProfile[]) : [],
+      creditsRemaining,
+      creditsCharged: charged,
+    })
   }
 }
 

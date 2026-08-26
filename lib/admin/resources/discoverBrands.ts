@@ -13,8 +13,15 @@ export interface DiscoverResult {
   savedContacts: number
   /** Profiles screened to produce this batch. */
   screened: number
-  /** Searches run — one ScrapeCreators credit each. */
+  /** Searches RUN. Not the same as credits — see creditsSpent. */
   searches: number
+  /**
+   * What those searches actually cost. A search that matches nothing is free, and most
+   * of the query pool matches nothing, so this is typically a small fraction of
+   * `searches` — reporting requests as credits is what made the old cost ceiling stop
+   * a run after ~3 productive searches.
+   */
+  creditsSpent: number
   /** Set when discovery fell back to the Wikidata dataset. */
   note: string
 }
@@ -38,6 +45,7 @@ export async function discoverBrands(limit: number): Promise<DiscoverResult> {
       savedContacts: typeof data?.savedContacts === 'number' ? data.savedContacts : 0,
       screened: typeof data?.screened === 'number' ? data.screened : 0,
       searches: typeof data?.searches === 'number' ? data.searches : 0,
+      creditsSpent: typeof data?.creditsSpent === 'number' ? data.creditsSpent : 0,
       note: typeof data?.note === 'string' ? data.note : '',
     }
   } catch (e) {
