@@ -19,6 +19,10 @@
 > now enforces a PH-morning send window, a warm-up ramp, one-send-per-tick jitter
 > pacing, auto-queue with MX validation, scope-gated bounce detection feeding
 > `suppression_list`, and a kill switch (§6c–§6e, migration `0017_daily_sender.sql`).
+> **Auto-resume is BUILT (2026-08-26):** migration `0019_auto_resume.sql` records
+> pause provenance (`paused_source`/`paused_at`/`auto_resume`), and `drain-queue`
+> lifts an AUTOMATIC bounce pause once the bounce window is clean again — manual
+> pauses still wait for the admin (§6e; shared math in `lib/outreach/pauseMath.ts`).
 > **Still design-only: the optional Playwright worker.**
 > Grounded in research done 2026-06-15 (sources at the end) — re-verify external facts.
 
@@ -158,9 +162,27 @@ already part-enriched.
   only render "Nothing to scrape / Edge Function returned a non-2xx status code" — the
   credits were fine the whole time. Now: one deadline for the whole request
   (`BUDGET_MS` 125s), a 60% slice for Instagram, `SEARCH_CONCURRENCY` 4 so the slice buys
-  ~20 searches instead of ~4, and `SC_TIMEOUT` cut 20s → 9s because with 400+ queries in
-  the pool a slow one is never worth waiting on. Running short of time returns **200 with
-  a note**, never a 5xx — a smaller batch is not a server error.
+  ~20 searches instead of ~5, and `SC_TIMEOUT` at **15s with one retry on timeout/429**
+  (2026-08-26 — the earlier 9s cut over-corrected: a warm search answers in 10–20s, so 9s
+  aborted searches whose credit was already spent and recorded their niches as empty; the
+  run's deadline, not the per-search timeout, protects the wall clock). Failed searches
+  are now counted per class (`searchFailures: {timeout, http, network}`) and named in the
+  run's note, so a throttled API no longer reads as a string of quiet niches. Candidates a
+  paid search returned are **never truncated to `limit`** — limit stops NEW searches only,
+  so a batch can come back larger than requested. And the cost cap is now
+  **`MAX_SEARCH_CREDITS` = 30 credits CHARGED, not requests issued** (2026-08-26): the API
+  answers a no-match search with **HTTP 404 at 0 credits** (keyed on the status, not the
+  error string, so renaming it can't silently revert the model), and most compound pool
+  framings match nothing — a request-counting cap burnt its 30 on free empties and
+  stopped after ~3 productive searches (measured: same 45s budget went from 3 candidates
+  to 9 once empties stopped counting; a later run logged 13 searches / 6 free / 7 charged).
+  Credits alone would leave request volume unbounded, so **`MAX_SEARCH_REQUESTS` = 120**
+  is the second ceiling — the shared key also powers `pull-videos`, and throttling it
+  breaks the media kit, not just a run. Brave has its own **`MAX_BRAVE_REQUESTS` = 30**:
+  it meters per request with no free empties, so it must not ride the credit constant.
+  `SAFETY_MS` is **35s** because the retry makes one search up to two attempts (~31s) —
+  at 25s a worker could carry the invocation past the 150s kill. Running short of time
+  returns **200 with a note**, never a 5xx — a smaller batch is not a server error.
 - **`wantsCreators()` + `intentFirst()`** — the load-bearing intent signal is the BIO,
   not the query. Instagram's profile search matches mostly on username and display name,
   so an "ambassador program" query returns brands whose *name* contains it, which is a
@@ -395,19 +417,32 @@ attachments.
 from `app_settings` so the admin can move it without a migration). Each tick, in
 order:
 
-1. **Kill switch** — `app_settings.sending_paused` stops everything, including
-   manual sends (enforced in `sendPitch`, message names the reason). Set manually
-   in Settings, or automatically by the bounce sweep (below).
-2. **Window** — Asia/Manila wall clock (UTC+8, no DST — plain arithmetic), default
+1. **Housekeeping — runs even while paused** (reordered 2026-08-26):
+   `requeue_stuck_sends()` rescues rows a dead worker stranded in `'sending'`
+   (they used to rot through a pause, then fail on resume), and the **bounce
+   sweep** (once per PH day, only when `gmail_account.scope` contains
+   `gmail.readonly`): `_shared/bounces.ts` reads mailer-daemon DSNs, intersects
+   the addresses with contacts we actually emailed (false-positive guard), marks
+   them `bounced`, inserts `suppression_list (reason='bounce')`, cancels their
+   queue rows, and **auto-pauses** at ≥3 bounces in 7 days or an 8% bounce rate
+   (thresholds live in `lib/outreach/pauseMath.ts`, shared with the studio's
+   display). Sweeping while paused matters: the DSNs that decide whether it is
+   safe to resume arrive *after* the spike paused sending. `gmail.readonly` is a
+   RESTRICTED scope — reconnecting shows Google's unverified-app warning once;
+   sending works without it, detection just stays off.
+2. **Kill switch + auto-resume** — `app_settings.sending_paused` stops everything,
+   including manual sends (enforced in `sendPitch`, message names the reason).
+   Migration 0019 records WHO paused (`paused_source`: `'manual'` from Settings,
+   `'auto'` from the breaker, plus `paused_at`). An **automatic** pause lifts
+   itself when `auto_resume` is on (default) and the SAME predicate that tripped
+   it evaluates clean — i.e. the bounced sends have aged out of the rolling 7-day
+   window, which is the reputation cool-down the pause was buying. Resuming on
+   the predicate's negation (not a timer) cannot flap: nothing sends while
+   paused, so the counts only decay. Manual pauses (and pre-0019 pauses with no
+   provenance) always wait for the admin.
+3. **Window** — Asia/Manila wall clock (UTC+8, no DST — plain arithmetic), default
    **8–11 AM weekdays** (`send_window_start/end`, `send_weekdays_only`). Everything
    queued outside it — including the UI's "Send now" — waits here.
-3. **Bounce sweep** (once per PH day, only when `gmail_account.scope` contains
-   `gmail.readonly`): `_shared/bounces.ts` reads mailer-daemon DSNs, intersects the
-   addresses with contacts we actually emailed (false-positive guard), marks them
-   `bounced`, inserts `suppression_list (reason='bounce')`, cancels their queue
-   rows, and **auto-pauses** at ≥3 bounces in 7 days or an 8% bounce rate.
-   `gmail.readonly` is a RESTRICTED scope — reconnecting shows Google's unverified-
-   app warning once; sending works without it, detection just stays off.
 4. **Budget** — `effectiveDailyCap − sent in last 24h`; nothing claims past it.
 5. **Auto-queue** (`auto_queue`, default on) — tops the queue up to the day's
    budget from `status='new'` contacts with `confidence ≥ auto_queue_min_confidence`

@@ -265,9 +265,11 @@ JS-walled fetch.
 >   rejected as too high-maintenance for a single-creator tool.)
 
 **Flow (RawVideo is the contract boundary — everything downstream is unchanged):**
-- `POST /api/admin/brands/pull-videos { platform, handle }` → `lib/social/scrapeCreators.ts`
-  `fetchProfilePosts()` calls ScrapeCreators with the `SCRAPECREATORS_API_KEY` (header
-  `x-api-key`), maps the response → `RawVideo[]` (id, url, caption, raw cover, views, likes):
+- The **`pull-videos` Edge Function** `{ platform, handle, cursor? }` (the old Next route
+  `/api/admin/brands/pull-videos` + `lib/social/scrapeCreators.ts` are gone — logic lives in
+  `supabase/functions/pull-videos/index.ts`) calls ScrapeCreators with the
+  `SCRAPECREATORS_API_KEY` (header `x-api-key`), maps the response → `RawVideo[]` (id, url,
+  caption, raw cover, views, likes):
   - TikTok `GET /v3/tiktok/profile/videos?handle=` → `aweme_list[].{aweme_id, desc,
     video.dynamic_cover.url_list[0], statistics.play_count/digg_count, share_url}`. ⚠️ Use
     `dynamic_cover` (image/webp) — TikTok serves the static `cover`/`origin_cover` as
@@ -275,8 +277,11 @@ JS-walled fetch.
   - Instagram `GET /v2/instagram/user/posts?handle=` → `items[].{pk, caption.text,
     image_versions2.candidates[0].url, play_count, like_count, url}` (caption can be null).
   - Host is fixed to `api.scrapecreators.com` → **no SSRF surface** (unlike the old route).
-  - Pagination: pages up to **5 pages / 60 items** (TikTok `max_cursor`, IG `next_max_id`),
-    dedup by id, 1 credit/page; returns partial results if a later page fails.
+  - Pagination (2026-08-26): up to **2 pages / 2 credits per pull** (TikTok `max_cursor`,
+    IG `next_max_id`), and **everything fetched is kept** (~60 TikTok / ~24 IG — no item
+    cap; slicing below the page boundary discarded videos the credit had already bought).
+    Returns `nextCursor` so the modal's "Pull older posts" continues deeper on the next
+    call; dedup by id; partials kept if a later page fails.
 - Caption→brand matching: `lib/social/brandMatch.ts` (`matchCaption`) — unchanged. Only fires
   when a caption literally names a managed brand, so organic (non-sponsored) posts show as
   "unmatched" — that's correct; assign them by hand via the dropdown.
@@ -287,7 +292,8 @@ JS-walled fetch.
 - Review + commit: `components/admin/PullVideosModal.tsx` (Brand Partners "Pull videos",
   default handle `simxmargo`) → `POST /api/admin/brands/add-videos` re-hosts each cover
   (`lib/social/rehost.ts`, which now also rejects non-http(s) urls) and appends to each brand's
-  `media` (dedup by url, cap 24). ScrapeCreators returns ORIGINAL CDN cover URLs
+  `media` (the modal dedups by url against existing media on Add; no item cap — that "cap 24"
+  belonged to the deleted Next `add-videos` route). ScrapeCreators returns ORIGINAL CDN cover URLs
   (`*.tiktokcdn(-us|-eu).com` / `*.cdninstagram.com` / `*.fna.fbcdn.net`), all on the
   `isAllowedThumbHost` allowlist.
 
@@ -295,7 +301,12 @@ JS-walled fetch.
 expire; 1 credit/request), put it in `.env` as `SCRAPECREATORS_API_KEY=`, restart the dev
 server. Unset → the tool returns a clear "key not configured" error.
 
-**Limits / caveats:** capped at ~60 posts / 5 credits per pull; covers are signed/expiring
+**Limits / caveats:** 2 pages / 2 credits per pull, older history via cursor continuation
+("Pull older posts"); cover re-hosting runs **5 at a time** (each buffers up to 5MB on a
+256MB worker, and a throttled one falls back to a CDN url that 404s within hours — the
+response reports how many failed); an unknown/deactivated handle answers **404** and gets
+a soft "check the handle" note, while a 200 with no list container is real schema drift;
+covers are signed/expiring
 (re-hosted on commit; TikTok static covers are HEIC so we take the webp `dynamic_cover`);
 auto-match needs a brand name in the caption (organic posts won't match → assign by hand);
 ToS-gray (public data — fine at this volume, don't redistribute media commercially); schema
