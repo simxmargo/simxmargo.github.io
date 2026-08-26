@@ -1,11 +1,13 @@
 // `drain-queue` Edge Function — the worker behind SCHEDULED outreach sending.
 //
 // pg_cron calls this every minute of the cron envelope (00:00–09:59 UTC — see
-// migration 0017). Each tick it: enforces the kill switch and the PH-morning send
-// window, sweeps Gmail for bounces once a day, tops the queue up from validated
-// high-confidence contacts (auto-queue), and then — with a coin-flip's worth of
-// jitter — sends AT MOST ONE queued pitch through the same `sendPitch()` the admin
-// UI uses.
+// migration 0017). Each tick it: rescues rows a dead worker stranded and sweeps
+// Gmail for bounces once a day (both run even while paused — see the tick), then
+// enforces the kill switch — lifting an AUTOMATIC pause once the bounce window is
+// clean again (0019) — and the PH-morning send window, tops the queue up from
+// validated high-confidence contacts (auto-queue), and then — with a coin-flip's
+// worth of jitter — sends AT MOST ONE queued pitch through the same `sendPitch()`
+// the admin UI uses.
 //
 // ── Why one send per tick, with random skips ────────────────────────────────────
 // The old drain claimed 5 rows per tick, which produced 14 pitches in a 2-minute
@@ -53,6 +55,14 @@ import { sweepBounces } from '../_shared/bounces.ts'
 import { buildDraft, resolveTemplate } from '../../../lib/emailTemplate.ts'
 import { mailableReason } from '../../../lib/outreach/pickEmail.ts'
 import { checkDomainDeliverable, emailDomain } from '../../../lib/outreach/validateEmail.ts'
+// The breaker's trip/reset predicate — shared with the studio's Sending safety
+// card so enforcement and explanation cannot drift (see lib/outreach/pauseMath.ts).
+import {
+  BOUNCE_WINDOW_DAYS,
+  bounceTripped,
+  bounceWindowSince,
+  type BounceStats,
+} from '../../../lib/outreach/pauseMath.ts'
 import type { Contact, CreatorProfile } from '../../../lib/types.ts'
 
 // Chance a tick that COULD send actually does. The gaps this produces (1 minute,
@@ -70,12 +80,6 @@ const MX_CACHE_DAYS = 30
 // Backoff when the daily cap is the blocker. The pitch is fine, the clock isn't — so
 // the row goes back to 'queued' rather than 'failed'.
 const CAP_RETRY_MINUTES = 30
-
-// Kill-switch thresholds: pause outright at this many 7-day bounces, or at an 8%
-// bounce rate once there are enough sends for a rate to mean anything.
-const BOUNCE_PAUSE_COUNT = 3
-const BOUNCE_PAUSE_RATE = 0.08
-const BOUNCE_RATE_MIN_SENDS = 10
 
 // Asia/Manila is UTC+8 with no DST — fixed arithmetic beats shipping tz data into
 // an edge bundle. All "PH" values below are derived by shifting the clock 8h and
@@ -136,16 +140,79 @@ interface GmailAccountRow {
   needs_reauth: boolean
 }
 
-async function pauseSending(svc: SupabaseClient, reason: string): Promise<void> {
-  await svc
+// A pause the breaker did NOT set outranks it. Since the sweep now runs while paused,
+// a trip can land on top of the admin's kill switch — and stamping 'auto' over it would
+// hand a human decision to auto-resume. Sending is already stopped in that case, and the
+// bounce evidence is recorded on the contacts either way, so there is nothing to write.
+// Re-tripping its own pause keeps the original paused_at: refreshing the reason with
+// today's numbers must not reset "paused since".
+async function pauseSending(
+  svc: SupabaseClient,
+  reason: string,
+  current: { paused: boolean; source: string },
+): Promise<void> {
+  if (current.paused && current.source !== 'auto') return
+
+  const now = new Date().toISOString()
+  const patch: Record<string, unknown> = {
+    sending_paused: true,
+    paused_reason: reason,
+    paused_source: 'auto',
+    updated_at: now,
+  }
+  if (!current.paused) patch.paused_at = now
+  await svc.from('app_settings').update(patch).eq('id', 1)
+}
+
+// The breaker's reset. Only ever lifts an AUTOMATIC pause — a manual one is a human
+// decision and waits for the human.
+//
+// The `paused_source`/`sending_paused` predicates make this a compare-and-swap, not a
+// blind write, and that is load-bearing: the tick decided to resume from settings read
+// BEFORE a Gmail token refresh and a full bounce sweep — tens of seconds during which the
+// admin can hit the kill switch, or an overlapping tick (the header notes those are
+// expected) can reach here too. Without the guard, the stale decision would silently wipe
+// a fresh manual pause. Returns whether this call is the one that actually lifted it.
+async function resumeSending(svc: SupabaseClient): Promise<boolean> {
+  const { data } = await svc
     .from('app_settings')
-    .update({ sending_paused: true, paused_reason: reason, updated_at: new Date().toISOString() })
+    .update({
+      sending_paused: false,
+      paused_reason: '',
+      paused_source: '',
+      paused_at: null,
+      updated_at: new Date().toISOString(),
+    })
     .eq('id', 1)
+    .eq('sending_paused', true)
+    .eq('paused_source', 'auto')
+    .select('id')
+
+  return (data ?? []).length > 0
+}
+
+// The predicate's inputs, over the rolling window — counted the same way for the
+// trip (dailyBounceCheck) and the auto-resume check, so the two cannot disagree.
+async function bounceStats(svc: SupabaseClient): Promise<BounceStats> {
+  const since = bounceWindowSince()
+  const [{ count: sends7d }, { count: bounced7d }] = await Promise.all([
+    svc.from('contacts').select('id', { count: 'exact', head: true }).gte('last_emailed_at', since),
+    svc
+      .from('contacts')
+      .select('id', { count: 'exact', head: true })
+      .eq('status', 'bounced')
+      .gte('last_emailed_at', since),
+  ])
+  return { sends: sends7d ?? 0, dead: bounced7d ?? 0 }
 }
 
 // Runs at most once per PH day, and only when the granted scope can read the inbox.
 // Returns true if it tripped the kill switch (the tick should stop sending).
-async function dailyBounceCheck(svc: SupabaseClient, account: GmailAccountRow): Promise<boolean> {
+async function dailyBounceCheck(
+  svc: SupabaseClient,
+  account: GmailAccountRow,
+  settings: SendSettings,
+): Promise<boolean> {
   if (!account.refresh_token || !account.scope.includes('gmail.readonly')) return false
   if (account.last_bounce_check_at && account.last_bounce_check_at >= phDayStartIso()) return false
 
@@ -166,25 +233,18 @@ async function dailyBounceCheck(svc: SupabaseClient, account: GmailAccountRow): 
   }
   if (bounced.length === 0) return false
 
-  // Kill-switch math over a 7-day horizon, counting each dead address once
+  // Kill-switch math over the rolling window, counting each dead address once
   // (sweepBounces only reports contacts newly flipped to 'bounced').
-  const since = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString()
-  const [{ count: sends7d }, { count: bounced7d }] = await Promise.all([
-    svc.from('contacts').select('id', { count: 'exact', head: true }).gte('last_emailed_at', since),
-    svc
-      .from('contacts')
-      .select('id', { count: 'exact', head: true })
-      .eq('status', 'bounced')
-      .gte('last_emailed_at', since),
-  ])
-  const sends = sends7d ?? 0
-  const dead = bounced7d ?? 0
+  const stats = await bounceStats(svc)
 
-  if (dead >= BOUNCE_PAUSE_COUNT || (sends >= BOUNCE_RATE_MIN_SENDS && dead / sends > BOUNCE_PAUSE_RATE)) {
+  if (bounceTripped(stats)) {
     await pauseSending(
       svc,
-      `Auto-paused: ${dead} of ${sends} addresses emailed in the last 7 days bounced. ` +
-        `Review the bounced contacts (their alternates may hold a live address), then unpause in Settings.`,
+      // Neutral on what happens next — the Settings card explains resume behavior
+      // from paused_source + the auto_resume knob, which can change after this writes.
+      `Auto-paused: ${stats.dead} of ${stats.sends} addresses emailed in the last ${BOUNCE_WINDOW_DAYS} days bounced. ` +
+        `Review the bounced contacts — their alternates may hold a live address.`,
+      { paused: settings.sendingPaused, source: settings.pausedSource },
     )
     return true
   }
@@ -337,36 +397,58 @@ Deno.serve(async (req: Request): Promise<Response> => {
   const svc = serviceClient()
 
   const settings = await loadSendSettings(svc)
-  if (settings.sendingPaused) {
-    return json({ ok: true, skipped: 'paused', reason: settings.pausedReason })
-  }
 
   // The morning window, in PH wall-clock terms. Everything queued outside it —
-  // including the UI's "Send now" — simply waits here until the window opens.
+  // including the UI's "Send now" — simply waits until the window opens. Decided up
+  // front (rather than returned on) because the housekeeping below needs to know.
   const ph = phClock()
   const hour = ph.getUTCHours()
   const day = ph.getUTCDay() // 0 = Sunday
-  if (!force) {
-    if (settings.sendWeekdaysOnly && (day === 0 || day === 6)) {
-      return json({ ok: true, skipped: 'weekend' })
-    }
-    if (hour < settings.sendWindowStart || hour >= settings.sendWindowEnd) {
-      return json({ ok: true, skipped: 'window' })
+  const weekendBlocked = settings.sendWeekdaysOnly && (day === 0 || day === 6)
+  const outsideHours = hour < settings.sendWindowStart || hour >= settings.sendWindowEnd
+  const inWindow = force || (!weekendBlocked && !outsideHours)
+
+  // Housekeeping runs BEFORE the pause gate, so a paused tick still rescues rows a
+  // dead worker stranded in 'sending' — they used to rot there for the length of a
+  // pause, then land on the failed pile the moment it lifted — and still sweeps for
+  // bounces: the DSNs that matter most arrive AFTER a spike paused sending, and the
+  // resume decision below has to see them recorded (and suppressed), not sitting in
+  // the inbox. Gated on paused-or-in-window because the cron envelope is ~600 ticks a
+  // day against a ~180-tick window: on the rest, nothing is sending, so nothing can
+  // be stuck and the sweep can wait for the window.
+  if (settings.sendingPaused || inWindow) {
+    await svc.rpc('requeue_stuck_sends')
+
+    const { data: accountRow } = await svc
+      .from('gmail_account')
+      .select('email, refresh_token, scope, last_bounce_check_at, needs_reauth')
+      .eq('id', 1)
+      .maybeSingle()
+
+    if (accountRow && (await dailyBounceCheck(svc, accountRow as GmailAccountRow, settings))) {
+      return json({ ok: true, skipped: 'paused', reason: 'Bounce threshold tripped this tick.' })
     }
   }
 
-  // Rescue anything a dead worker abandoned before claiming new work, so a stuck row
-  // rejoins this same tick instead of waiting for the next one.
-  await svc.rpc('requeue_stuck_sends')
+  if (settings.sendingPaused) {
+    // Auto-resume: an AUTOMATIC pause lifts itself once the predicate that tripped
+    // it comes back clean — by then the bounced sends have aged out of the rolling
+    // window, which is exactly the reputation cool-down the pause was buying.
+    // Manual pauses (and pre-0019 rows with no provenance) always wait for the admin.
+    const canAutoResume = settings.pausedSource === 'auto' && settings.autoResume
+    if (!canAutoResume || bounceTripped(await bounceStats(svc))) {
+      return json({ ok: true, skipped: 'paused', reason: settings.pausedReason })
+    }
+    // The guarded update can legitimately match nothing — someone paused by hand while
+    // this tick was sweeping. Their pause stands; this tick has nothing further to do.
+    if (!(await resumeSending(svc))) {
+      return json({ ok: true, skipped: 'paused', reason: 'Pause changed during this tick.' })
+    }
+    // Otherwise fall through: this tick continues as a normal one.
+  }
 
-  const { data: accountRow } = await svc
-    .from('gmail_account')
-    .select('email, refresh_token, scope, last_bounce_check_at, needs_reauth')
-    .eq('id', 1)
-    .maybeSingle()
-
-  if (accountRow && (await dailyBounceCheck(svc, accountRow as GmailAccountRow))) {
-    return json({ ok: true, skipped: 'paused', reason: 'Bounce threshold tripped this tick.' })
+  if (!inWindow) {
+    return json({ ok: true, skipped: weekendBlocked ? 'weekend' : 'window' })
   }
 
   const cap = await effectiveDailyCap(svc, settings)

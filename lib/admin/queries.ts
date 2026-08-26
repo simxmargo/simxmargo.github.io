@@ -6,7 +6,7 @@ import { readBrands } from './resources/brands'
 import { readSocials } from './resources/socials'
 import { readInquiries } from './resources/inquiries'
 import { readSettings } from './resources/settings'
-import { readSendingAccount, readSendingSafety } from './resources/sendingAccount'
+import { readBounceEvidence, readSendingAccount, readSendingSafety } from './resources/sendingAccount'
 import { readFirstSendAt, readSendQueue } from './resources/sendQueue'
 
 // Centralized admin read-cache. Each resource now reads DIRECTLY from Supabase
@@ -31,6 +31,9 @@ export const adminKeys = {
   // Bounce-detection visibility (0017). Its own key for the same reason as
   // sendingAccount: the connect flow's polling must not refetch anything else.
   sendingSafety: ['admin', 'sendingSafety'] as const,
+  // When each currently-bounced contact was emailed — the Sending safety card's
+  // input for "an auto pause resumes around …" (0019).
+  bounceEvidence: ['admin', 'bounceEvidence'] as const,
   // The outreach workspace polls this while anything is counting down, so it stays a
   // key of its own — refetching the queue must never drag contacts through with it.
   sendQueue: ['admin', 'sendQueue'] as const,
@@ -48,6 +51,7 @@ const READERS = {
   settings: readSettings,
   sendingAccount: readSendingAccount,
   sendingSafety: readSendingSafety,
+  bounceEvidence: readBounceEvidence,
   sendQueue: readSendQueue,
   firstSendAt: readFirstSendAt,
 } as const

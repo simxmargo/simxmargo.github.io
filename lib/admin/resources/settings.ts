@@ -20,6 +20,10 @@ export interface SettingsShape {
   warmupStart: number
   sendingPaused: boolean
   pausedReason: string
+  /** Who paused (0019). '' = not paused, or a pre-0019 pause of unknown origin. */
+  pausedSource: '' | 'manual' | 'auto'
+  pausedAt: string | null
+  autoResume: boolean
   autoQueue: boolean
   autoQueueMinConfidence: number
   sendWeekdaysOnly: boolean
@@ -35,6 +39,7 @@ export interface SettingsShape {
 export interface SettingsSavePatch {
   dailyCap?: number
   sendingPaused?: boolean
+  autoResume?: boolean
   autoQueue?: boolean
   autoQueueMinConfidence?: number
   sendWeekdaysOnly?: boolean
@@ -62,7 +67,10 @@ export async function readSettings(): Promise<SettingsShape> {
     warmupStart: num(s.warmup_start, 5),
     sendingPaused: bool(s.sending_paused, false),
     pausedReason: typeof s.paused_reason === 'string' ? s.paused_reason : '',
-    autoQueue: bool(s.auto_queue, false),
+    pausedSource: s.paused_source === 'manual' || s.paused_source === 'auto' ? s.paused_source : '',
+    pausedAt: typeof s.paused_at === 'string' ? s.paused_at : null,
+    autoResume: bool(s.auto_resume, true),
+    autoQueue: bool(s.auto_queue, true),
     autoQueueMinConfidence: num(s.auto_queue_min_confidence, 55),
     sendWeekdaysOnly: bool(s.send_weekdays_only, true),
     sendWindowStart: num(s.send_window_start, 8),
@@ -85,10 +93,14 @@ export async function saveSettings(patch: SettingsSavePatch): Promise<void> {
   }
   if ('sendingPaused' in patch) {
     row.sending_paused = Boolean(patch.sendingPaused)
-    // A manual pause states its author; an unpause clears the reason so a stale
-    // auto-pause explanation can't outlive the condition it described.
+    // A manual pause states its author; an unpause clears reason + provenance so a
+    // stale auto-pause explanation can't outlive the condition it described. The
+    // 'manual' source is what tells drain-queue this pause is NEVER auto-resumed.
     row.paused_reason = patch.sendingPaused ? 'Paused manually in Settings.' : ''
+    row.paused_source = patch.sendingPaused ? 'manual' : ''
+    row.paused_at = patch.sendingPaused ? new Date().toISOString() : null
   }
+  if ('autoResume' in patch) row.auto_resume = Boolean(patch.autoResume)
   if ('autoQueue' in patch) row.auto_queue = Boolean(patch.autoQueue)
   if ('autoQueueMinConfidence' in patch) {
     row.auto_queue_min_confidence = Math.max(0, Math.min(100, Math.trunc(Number(patch.autoQueueMinConfidence) || 0)))

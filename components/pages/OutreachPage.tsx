@@ -288,7 +288,9 @@ export function OutreachPage() {
               sat until Monday while the header said otherwise. */}
           <p className="page-sub">
             {settingsQ.data?.sendingPaused
-              ? 'Sending is paused — queued pitches wait until you resume it in Settings.'
+              ? settingsQ.data.pausedSource === 'auto' && settingsQ.data.autoResume
+                ? 'Sending is auto-paused after a bounce spike — it resumes itself once the bounce window clears (details in Settings).'
+                : 'Sending is paused — queued pitches wait until you resume it in Settings.'
               : `Queued pitches go out one at a time on ${schedule} — even if you close this tab.`}
           </p>
         </div>

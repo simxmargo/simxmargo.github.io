@@ -1,5 +1,6 @@
 import { supabaseBrowser } from '@/lib/supabase/browser'
 import { fnErrorMessage } from '@/lib/admin/fnError'
+import { bounceWindowSince } from '@/lib/outreach/pauseMath'
 
 // Browser-only data layer for the outreach SENDING ACCOUNT (Settings → Sending account).
 //
@@ -89,6 +90,27 @@ export async function readSendingSafety(): Promise<SendingSafety> {
     canDetectBounces: r.can_detect_bounces === true,
     lastBounceCheckAt: typeof r.last_bounce_check_at === 'string' ? r.last_bounce_check_at : null,
   }
+}
+
+// The bounce breaker's evidence: when each currently-bounced contact was emailed,
+// inside the rolling window. Feeds lib/outreach/pauseMath.ts `estimateResumeAt` so
+// the Sending safety card can say when an auto pause will lift. Display-only —
+// drain-queue re-counts for itself. Contacts are admin-readable under RLS, so this
+// is a plain select, not an RPC.
+export async function readBounceEvidence(): Promise<string[]> {
+  const sb = supabaseBrowser
+  if (!sb) throw new Error('Studio is not configured.')
+
+  const { data, error } = await sb
+    .from('contacts')
+    .select('last_emailed_at')
+    .eq('status', 'bounced')
+    .gte('last_emailed_at', bounceWindowSince())
+  if (error) return [] // fail soft: the card just omits the "around …" estimate
+
+  return (data ?? [])
+    .map((r) => (typeof r.last_emailed_at === 'string' ? r.last_emailed_at : ''))
+    .filter(Boolean)
 }
 
 // Shared invoke wrapper: every action posts `{ action }` to the same function and

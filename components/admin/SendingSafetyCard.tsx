@@ -7,6 +7,7 @@ import { adminKeys, useAdminResource } from '@/lib/admin/queries'
 import { saveSettings, type SettingsShape } from '@/lib/admin/resources/settings'
 import type { SendingSafety } from '@/lib/admin/resources/sendingAccount'
 import { effectiveCap, fmtHourPH } from '@/lib/outreach/sendWindow'
+import { BOUNCE_WINDOW_DAYS, estimateResumeAt } from '@/lib/outreach/pauseMath'
 import { useStore } from '@/lib/store'
 
 // Settings → Sending safety. The knobs behind the DAILY AUTOMATED sender
@@ -20,6 +21,7 @@ export function SendingSafetyCard() {
   const qc = useQueryClient()
   const q = useAdminResource<SettingsShape>('settings')
   const safetyQ = useAdminResource<SendingSafety>('sendingSafety')
+  const bounceQ = useAdminResource<string[]>('bounceEvidence')
   const settings = q.data
   const sentToday = useStore((s) => s.sentToday)
 
@@ -64,6 +66,13 @@ export function SendingSafetyCard() {
   const ramping = eff < settings.dailyCap
   const safety = safetyQ.data
 
+  const fmtDate = (iso: string): string =>
+    new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+
+  // Only the breaker's own pause ever lifts itself, so only it gets an estimate.
+  const autoPaused = settings.sendingPaused && settings.pausedSource === 'auto'
+  const resumeFloor = autoPaused ? estimateResumeAt(bounceQ.data ?? []) : null
+
   return (
     <section className="card">
       <div className="card-head">
@@ -80,7 +89,19 @@ export function SendingSafetyCard() {
         {settings.sendingPaused && (
           <div className="banner banner-warn" role="alert" style={{ marginBottom: 14 }}>
             <AlertTriangle size={18} aria-hidden="true" />
-            <span>{settings.pausedReason || 'Sending is paused.'}</span>
+            <span>
+              {settings.pausedReason || 'Sending is paused.'}
+              {settings.pausedAt && ` Paused since ${fmtDate(settings.pausedAt)}.`}
+              {/* "No earlier than", never "around": the floor is when enough bounces age
+                  out, but total sends decay with them, so the rate can stay tripped past
+                  it. The tick re-counts both for real — see estimateResumeAt. */}
+              {autoPaused &&
+                (settings.autoResume
+                  ? ` Sending resumes on its own once the ${BOUNCE_WINDOW_DAYS}-day bounce window is clean${
+                      resumeFloor ? `, no earlier than ${fmtDate(resumeFloor.toISOString())}` : ''
+                    }.`
+                  : ' Automatic resume is off — sending stays paused until you flip the switch.')}
+            </span>
           </div>
         )}
 
@@ -90,7 +111,8 @@ export function SendingSafetyCard() {
               <div className="fc-title">Pause all sending</div>
               <div className="fc-sub">
                 The kill switch. Nothing sends while this is on — scheduled, manual, or auto-queued. It
-                also flips itself on if bounces spike.
+                flips itself on if bounces spike, and — with Resume automatically on — back off once
+                they clear.
               </div>
             </div>
             <button
@@ -99,6 +121,28 @@ export function SendingSafetyCard() {
               aria-checked={settings.sendingPaused}
               aria-label="Pause all outreach sending"
               onClick={() => void patch({ sendingPaused: !settings.sendingPaused })}
+              className="switch"
+              disabled={busy}
+            >
+              <span className="switch-knob" />
+            </button>
+          </div>
+
+          <div className="field-card">
+            <div>
+              <div className="fc-title">Resume automatically</div>
+              <div className="fc-sub">
+                After an automatic bounce pause, sending turns itself back on once the trailing{' '}
+                {BOUNCE_WINDOW_DAYS}-day window is clean again. A pause you set by hand always waits
+                for you.
+              </div>
+            </div>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={settings.autoResume}
+              aria-label="Resume sending automatically after a bounce pause clears"
+              onClick={() => void patch({ autoResume: !settings.autoResume })}
               className="switch"
               disabled={busy}
             >

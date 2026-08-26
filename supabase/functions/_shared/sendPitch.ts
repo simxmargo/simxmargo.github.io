@@ -103,6 +103,9 @@ export interface SendSettings {
   warmupStart: number
   sendingPaused: boolean
   pausedReason: string
+  /** Who paused (0019). '' = unknown/pre-0019 — treated as manual, never auto-resumed. */
+  pausedSource: '' | 'manual' | 'auto'
+  autoResume: boolean
   autoQueue: boolean
   autoQueueMinConfidence: number
   sendWeekdaysOnly: boolean
@@ -120,7 +123,9 @@ export async function loadSendSettings(svc: SupabaseClient): Promise<SendSetting
     warmupStart: Math.max(1, num(s.warmup_start, 5)),
     sendingPaused: bool(s.sending_paused, false),
     pausedReason: typeof s.paused_reason === 'string' ? s.paused_reason : '',
-    autoQueue: bool(s.auto_queue, false),
+    pausedSource: s.paused_source === 'manual' || s.paused_source === 'auto' ? s.paused_source : '',
+    autoResume: bool(s.auto_resume, true),
+    autoQueue: bool(s.auto_queue, true), // mirrors the DB default (0017) — it was false here and drifted
     autoQueueMinConfidence: num(s.auto_queue_min_confidence, 55),
     sendWeekdaysOnly: bool(s.send_weekdays_only, true),
     sendWindowStart: num(s.send_window_start, 8),
