@@ -43,7 +43,6 @@ export function ContactEmailPanel({ email, toName, deliverable, onClearDeliverab
       <a className="ro-email" href={mailHref}>
         {email}
       </a>
-      <p className="ro-hint">Send over your brief: brand, timeline, goals and budget.</p>
 
       {deliverable && (
         <p className="ro-pkg">

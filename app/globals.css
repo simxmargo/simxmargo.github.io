@@ -475,7 +475,6 @@ body {
 .mk .reach-out { background: var(--bg2); border: 1px solid var(--line); padding: clamp(26px, 4vw, 46px); display: flex; flex-direction: column; align-items: flex-start; gap: 14px; }
 .mk .ro-email { color: var(--ink); font-size: clamp(21px, 2.5vw, 31px); font-weight: 600; letter-spacing: -0.01em; line-height: 1.2; text-decoration: underline; text-decoration-color: transparent; text-underline-offset: 6px; overflow-wrap: anywhere; transition: text-decoration-color 0.2s ease; }
 .mk .ro-email:hover, .mk .ro-email:focus-visible { text-decoration-color: var(--accent-text); }
-.mk .ro-hint { color: var(--muted); margin: 0; font-size: 15.5px; line-height: 1.5; }
 .mk .ro-pkg { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin: 0; padding: 10px 14px; border: 1px solid var(--line); font-size: 14.5px; color: var(--muted); }
 .mk .ro-pkg strong { color: var(--ink); font-weight: 600; }
 .mk .ro-actions { display: flex; gap: 12px; flex-wrap: wrap; align-self: stretch; margin-top: 6px; }
