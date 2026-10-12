@@ -98,7 +98,7 @@ export function RevealRoot() {
     // so reaching them simply clears the others. Runs regardless of reduced-motion — it's a
     // color/underline change, not movement.
     const navLinks = Array.from(root.querySelectorAll<HTMLAnchorElement>('.nlink'))
-    const sections = ['top', 'reach', 'partners', 'rates', 'contact']
+    const sections = ['top', 'reach', 'insights', 'partners', 'rates', 'contact']
       .map((id) => document.getElementById(id))
       .filter((el): el is HTMLElement => Boolean(el))
     let spy: IntersectionObserver | null = null

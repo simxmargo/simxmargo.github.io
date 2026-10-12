@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { Send, Settings as Cog, UserCircle, LayoutGrid, BarChart3, Inbox, Palette, Type } from 'lucide-react'
+import { Send, Settings as Cog, UserCircle, LayoutGrid, BarChart3, PieChart, Inbox, Palette, Type } from 'lucide-react'
 import { useStore } from '@/lib/store'
 import { AdminQueryProvider } from '@/components/admin/AdminQueryProvider'
 import { useAdminResource } from '@/lib/admin/queries'
@@ -17,12 +17,13 @@ import { ProfileEditor } from '@/components/admin/ProfileEditor'
 import { ContentEditor } from '@/components/admin/ContentEditor'
 import { PortfolioManager } from '@/components/admin/PortfolioManager'
 import { SocialStatsEditor } from '@/components/admin/SocialStatsEditor'
+import { InsightsEditor } from '@/components/admin/InsightsEditor'
 import { InquiriesInbox } from '@/components/admin/InquiriesInbox'
 import { ThemeEditor } from '@/components/admin/ThemeEditor'
 import { SidebarBrand } from '@/components/admin/SidebarBrand'
 import { signOutAdmin } from '@/lib/admin/auth'
 
-type Panel = 'profile' | 'portfolio' | 'social' | 'inquiries' | 'theme' | 'content' | 'outreach' | 'settings'
+type Panel = 'profile' | 'portfolio' | 'social' | 'insights' | 'inquiries' | 'theme' | 'content' | 'outreach' | 'settings'
 
 const GROUPS = [
   {
@@ -31,6 +32,7 @@ const GROUPS = [
       { key: 'profile', label: 'Profile', icon: UserCircle },
       { key: 'portfolio', label: 'Portfolio', icon: LayoutGrid },
       { key: 'social', label: 'Social Stats', icon: BarChart3 },
+      { key: 'insights', label: 'Insights', icon: PieChart },
       { key: 'theme', label: 'Theme', icon: Palette },
       { key: 'content', label: 'Content', icon: Type },
     ],
@@ -174,6 +176,7 @@ function StudioShell() {
         {panel === 'profile' && <ProfileEditor />}
         {panel === 'portfolio' && <PortfolioManager />}
         {panel === 'social' && <SocialStatsEditor />}
+        {panel === 'insights' && <InsightsEditor />}
         {panel === 'inquiries' && <InquiriesInbox />}
         {panel === 'theme' && <ThemeEditor />}
         {panel === 'content' && <ContentEditor />}

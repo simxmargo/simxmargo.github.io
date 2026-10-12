@@ -21,6 +21,8 @@ import { HeroSection } from '@/components/mediakit/HeroSection'
 import { SocialStatsStrip } from '@/components/mediakit/SocialStatsStrip'
 import { PortfolioGrid } from '@/components/mediakit/PortfolioGrid'
 import { RateAndContact } from '@/components/mediakit/RateAndContact'
+import { InsightsSection } from '@/components/mediakit/InsightsSection'
+import { renderableInsights } from '@/lib/mediakit/insights'
 import { MediaKitFooter } from '@/components/mediakit/MediaKitFooter'
 
 export function MediaKitLive({ initial }: { initial: MediaKitData }) {
@@ -84,13 +86,26 @@ export function MediaKitLive({ initial }: { initial: MediaKitData }) {
   const c = profile.content ?? {}
   const partnersEyebrow = c.partnersEyebrow?.trim() || DEFAULT_SITE_COPY.partnersEyebrow
   const partnersTitle = c.partnersTitle?.trim() || DEFAULT_SITE_COPY.partnersTitle
+  // Empty unless the admin enabled the section AND saved at least one usable chart.
+  const insights = renderableInsights(c.insights)
 
   return (
     <>
       <RevealRoot />
-      <TopNav name={profile.displayName} showRates={profile.showRatesSection !== false} />
+      <TopNav
+        name={profile.displayName}
+        showRates={profile.showRatesSection !== false}
+        showInsights={insights.length > 0}
+      />
       <HeroSection profile={profile} socials={socials} />
       <SocialStatsStrip socials={socials} />
+      {insights.length > 0 && (
+        <InsightsSection
+          platforms={insights}
+          eyebrow={c.insightsEyebrow?.trim() || DEFAULT_SITE_COPY.insightsEyebrow}
+          title={c.insightsTitle?.trim() || DEFAULT_SITE_COPY.insightsTitle}
+        />
+      )}
       <PortfolioGrid brands={brands} socials={socials} partnersEyebrow={partnersEyebrow} partnersTitle={partnersTitle} />
       <RateAndContact profile={profile} />
       <MediaKitFooter profile={profile} socials={socials} />

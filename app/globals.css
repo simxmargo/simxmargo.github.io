@@ -412,6 +412,65 @@ body {
 .mk .compose-restart { color: var(--muted); margin-top: 2px; }
 .mk .compose-restart:hover { color: var(--ink); }
 
+/* Insights: a hairline row per platform, bare pies with their labels around them. */
+.mk .insights { padding: clamp(56px, 8vw, 104px) 0 clamp(20px, 3vw, 40px); border-top: 1px solid var(--line); }
+.mk .insights .sec-head { margin-bottom: 0; padding-bottom: clamp(18px, 2.6vw, 34px); }
+.mk .ins-plat { padding: clamp(30px, 4vw, 52px) 0 clamp(26px, 3.5vw, 44px); border-top: 1px solid var(--line); }
+.mk .ins-plat-head { margin-bottom: clamp(14px, 2vw, 24px); }
+.mk .ins-plat-name { display: inline-flex; align-items: center; gap: 12px; margin: 0; font-size: clamp(20px, 2.2vw, 28px); font-weight: 700; letter-spacing: -0.015em; line-height: 1.1; }
+.mk .ins-plat-name svg { color: var(--accent-text); flex: none; }
+.mk .ins-charts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: clamp(16px, 3vw, 40px); }
+.mk .ins-chart-t { text-align: center; }
+.mk .ins-chart-body { display: flex; justify-content: center; padding: 22px 0 8px; }
+
+/* The stage holds the svg; labels are positioned in % of it, so it can scale freely. */
+.mk .pie-stage { position: relative; width: 170px; aspect-ratio: 1; flex: none; margin: 0 auto; }
+.mk .pie-stage svg { display: block; width: 100%; height: 100%; overflow: visible; }
+.mk .pie-wedge { stroke: var(--bg); stroke-width: 2; cursor: pointer; transition: transform 0.35s cubic-bezier(0.2, 0.7, 0.2, 1), opacity 0.25s ease; }
+.mk .pie-wedge.is-active { transform: translate(var(--ex), var(--ey)); }
+.mk .pie-wedge.is-dim { opacity: 0.4; }
+.mk .pie-sweep { stroke-dasharray: 0 100; transition: stroke-dasharray 1s cubic-bezier(0.2, 0.7, 0.2, 1) var(--delay, 0s); }
+.mk .pie-stage.is-in .pie-sweep { stroke-dasharray: 100 100; }
+.mk .pie-lead { fill: none; stroke: var(--faint); stroke-width: 1; opacity: 0; transition: opacity 0.45s ease calc(var(--delay, 0s) + 0.6s), stroke 0.2s ease, transform 0.35s cubic-bezier(0.2, 0.7, 0.2, 1); }
+.mk .pie-stage.is-in .pie-lead { opacity: 1; }
+.mk .pie-stage.is-in .pie-lead.is-active { stroke: var(--ink); transform: translate(var(--ex), var(--ey)); transition-delay: 0s; }
+.mk .pie-stage.is-in .pie-lead.is-dim { opacity: 0.3; transition-delay: 0s; }
+.mk .pie-tag { position: absolute; transform: translateY(-50%); display: flex; flex-direction: column; gap: 1px; max-width: 88px; margin: 0 5px; padding: 0; border: 0; background: none; font-family: inherit; color: var(--ink); cursor: pointer; opacity: 0; transition: opacity 0.45s ease calc(var(--delay, 0s) + 0.6s), transform 0.35s cubic-bezier(0.2, 0.7, 0.2, 1); }
+.mk .pie-tag-r { align-items: flex-start; text-align: left; }
+.mk .pie-tag-l { align-items: flex-end; text-align: right; }
+.mk .pie-stage.is-in .pie-tag { opacity: 1; }
+.mk .pie-stage.is-in .pie-tag.is-active { transform: translate(var(--ex), var(--ey)) translateY(-50%); transition-delay: 0s; }
+.mk .pie-stage.is-in .pie-tag.is-dim { opacity: 0.35; transition-delay: 0s; }
+.mk .pie-tag:focus-visible, .mk .pie-key:focus-visible { outline: 2px solid var(--accent-text); outline-offset: 3px; }
+.mk .pie-tag-v { font-size: 15px; font-weight: 700; line-height: 1.1; letter-spacing: -0.01em; font-variant-numeric: tabular-nums; }
+.mk .pie-tag-lbl { font-size: 12px; color: var(--muted); line-height: 1.25; max-width: 88px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mk .pie-legend { display: none; }
+@media (max-width: 1180px) {
+  .mk .pie-stage { width: 148px; }
+}
+@media (max-width: 900px) {
+  .mk .ins-charts { grid-template-columns: 1fr; gap: 26px; }
+  .mk .ins-chart-t { text-align: left; }
+  .mk .ins-chart-body { justify-content: flex-start; align-items: center; gap: 22px; padding: 12px 0 0; }
+  .mk .pie-stage { width: 124px; margin: 0; }
+  .mk .pie-tag, .mk .pie-lead { display: none; }
+  .mk .pie-legend { display: flex; flex-direction: column; list-style: none; margin: 0; padding: 0; flex: 1; min-width: 0; }
+  .mk .pie-key { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 36px; padding: 2px 0; border: 0; background: none; color: var(--muted); font-family: inherit; font-size: 14.5px; text-align: left; cursor: pointer; transition: color 0.2s ease, opacity 0.2s ease; }
+  .mk .pie-key.is-active { color: var(--ink); }
+  .mk .pie-key.is-dim { opacity: 0.45; }
+  .mk .pie-swatch { width: 9px; height: 9px; border-radius: 50%; flex: none; }
+  .mk .pie-key-l { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .mk .pie-key-v { color: var(--ink); font-weight: 600; font-variant-numeric: tabular-nums; }
+}
+@media (hover: none) { .mk .pie-key { min-height: 44px; } }
+@media (prefers-reduced-motion: reduce) {
+  .mk .pie-sweep { stroke-dasharray: 100 100; transition: none; }
+  .mk .pie-stage .pie-tag, .mk .pie-stage .pie-lead { opacity: 1; transition: none; }
+  .mk .pie-wedge { transition: opacity 0.25s ease; }
+  .mk .pie-wedge.is-active, .mk .pie-stage.is-in .pie-lead.is-active { transform: none; }
+  .mk .pie-stage.is-in .pie-tag.is-active { transform: translateY(-50%); }
+}
+
 /* Email-first Collaborate panel (brief form switched off): the address is the headline. */
 .mk .reach-out { background: var(--bg2); border: 1px solid var(--line); padding: clamp(26px, 4vw, 46px); display: flex; flex-direction: column; align-items: flex-start; gap: 14px; }
 .mk .ro-email { color: var(--ink); font-size: clamp(21px, 2.5vw, 31px); font-weight: 600; letter-spacing: -0.01em; line-height: 1.2; text-decoration: underline; text-decoration-color: transparent; text-underline-offset: 6px; overflow-wrap: anywhere; transition: text-decoration-color 0.2s ease; }
