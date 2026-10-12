@@ -62,7 +62,7 @@ export interface PublicProfile {
 // that form to carry fields it never renders. These extra keys share the column
 // (no migration needed to add one) but are edited on entirely different screens.
 //
-// Both are typed loosely as string maps rather than importing their real shapes —
+// emailTemplate and signature are typed loosely as string maps rather than importing their real shapes —
 // each owner defaults every field on read (resolveTemplate / signatureFields), so a
 // partial or absent object can never blank out an email.
 export type ProfileContent = SiteCopy & {
@@ -70,6 +70,30 @@ export type ProfileContent = SiteCopy & {
   emailTemplate?: Record<string, string>
   /** Signature name/title/image overrides (_shared/signature.ts). */
   signature?: Record<string, string>
+  /** true ⇒ the public Collaborate section shows the brief form; unset/false ⇒ email-first panel. */
+  showContactForm?: boolean
+  /** Audience demographics per platform — admin → Insights (lib/mediakit/insights.ts). */
+  insights?: Insights
+}
+
+// One pie: a titled part-to-whole split (Gender, Age, Top countries). Values are
+// percentages as entered; the renderer normalises, so they needn't sum to exactly 100.
+export interface InsightSlice {
+  label: string
+  value: number
+}
+export interface InsightChart {
+  title: string
+  slices: InsightSlice[]
+}
+export interface InsightPlatform {
+  platform: Platform
+  charts: InsightChart[]
+}
+export interface Insights {
+  /** false/unset ⇒ the public Insights section is hidden. */
+  enabled?: boolean
+  platforms?: InsightPlatform[]
 }
 
 export interface SiteCopy {
@@ -85,6 +109,8 @@ export interface SiteCopy {
   collaborateTitle?: string
   partnersEyebrow?: string
   partnersTitle?: string
+  insightsEyebrow?: string
+  insightsTitle?: string
   // Hero call-to-action button labels.
   heroCtaPrimary?: string
   heroCtaSecondary?: string
@@ -102,6 +128,8 @@ export const DEFAULT_SITE_COPY: Required<SiteCopy> = {
   collaborateTitle: 'Work with me',
   partnersEyebrow: 'Trusted by',
   partnersTitle: 'Brand partners',
+  insightsEyebrow: 'Insights',
+  insightsTitle: 'Who’s watching',
   heroCtaPrimary: 'Work with me',
   heroCtaSecondary: 'See partners',
 }

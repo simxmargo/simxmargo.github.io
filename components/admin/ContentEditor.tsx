@@ -43,6 +43,8 @@ function toForm(content: SiteCopy | undefined): CopyForm {
     collaborateTitle: pick('collaborateTitle'),
     partnersEyebrow: pick('partnersEyebrow'),
     partnersTitle: pick('partnersTitle'),
+    insightsEyebrow: pick('insightsEyebrow'),
+    insightsTitle: pick('insightsTitle'),
     heroCtaPrimary: pick('heroCtaPrimary'),
     heroCtaSecondary: pick('heroCtaSecondary'),
   }
@@ -82,6 +84,8 @@ export function ContentEditor() {
       collaborateTitle: form.collaborateTitle.trim(),
       partnersEyebrow: form.partnersEyebrow.trim(),
       partnersTitle: form.partnersTitle.trim(),
+      insightsEyebrow: form.insightsEyebrow.trim(),
+      insightsTitle: form.insightsTitle.trim(),
       heroCtaPrimary: form.heroCtaPrimary.trim(),
       heroCtaSecondary: form.heroCtaSecondary.trim(),
     }
@@ -202,6 +206,15 @@ export function ContentEditor() {
             <div className="field">
               <label htmlFor="partnersTitle" className="flabel">Partners — title</label>
               <input id="partnersTitle" type="text" value={form.partnersTitle} onChange={(e) => update('partnersTitle', e.target.value)} className="input" placeholder={DEFAULT_SITE_COPY.partnersTitle} />
+            </div>
+
+            <div className="field">
+              <label htmlFor="insightsEyebrow" className="flabel">Insights — eyebrow</label>
+              <input id="insightsEyebrow" type="text" value={form.insightsEyebrow} onChange={(e) => update('insightsEyebrow', e.target.value)} className="input" placeholder={DEFAULT_SITE_COPY.insightsEyebrow} />
+            </div>
+            <div className="field">
+              <label htmlFor="insightsTitle" className="flabel">Insights — title</label>
+              <input id="insightsTitle" type="text" value={form.insightsTitle} onChange={(e) => update('insightsTitle', e.target.value)} className="input" placeholder={DEFAULT_SITE_COPY.insightsTitle} />
             </div>
           </div>
         </section>

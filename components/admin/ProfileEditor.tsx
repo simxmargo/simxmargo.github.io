@@ -20,6 +20,7 @@ import { useAdminResource, adminKeys, type AdminFetchError } from '@/lib/admin/q
 import { ImageField } from '@/components/admin/ImageField'
 import { FormSkeleton } from '@/components/admin/Skeleton'
 import type { PublicProfile, RateCardItem } from '@/lib/mediakit-types'
+import type { InquiryMailStatus } from '@/lib/admin/resources/sendingAccount'
 
 // What GET /api/admin/profile returns: the public profile (camelCase) plus the
 // read-only `metrics` (derived from social_stats) and the `platforms` list. The
@@ -47,6 +48,7 @@ interface ProfileForm {
   rateCard: RateCardItem[]
   showRates: boolean
   showRatesSection: boolean
+  showContactForm: boolean
   isPublished: boolean
 }
 
@@ -66,6 +68,7 @@ const EMPTY_FORM: ProfileForm = {
   rateCard: [],
   showRates: true,
   showRatesSection: true,
+  showContactForm: false,
   isPublished: false,
 }
 
@@ -87,6 +90,7 @@ function toForm(p: ProfileResponse | null | undefined): ProfileForm {
     rateCard: Array.isArray(p.rateCard) ? p.rateCard : [],
     showRates: (p as { showRates?: boolean }).showRates !== false, // default true
     showRatesSection: (p as { showRatesSection?: boolean }).showRatesSection !== false, // default true
+    showContactForm: p.content?.showContactForm === true, // default off
     isPublished: Boolean(p.isPublished),
   }
 }
@@ -102,7 +106,15 @@ export function ProfileEditor() {
       .filter((s) => s.handle)
       .sort((a, b) => (b.followers ?? 0) - (a.followers ?? 0))[0]?.handle ?? ''
 
+  // The brief form delivers through the linked Gmail, so it can only be switched ON
+  // once that link is KNOWN to file inquiries; while the check is pending or failed
+  // the switch stays as saved. Switching it OFF is always allowed.
+  const inquiryQ = useAdminResource<InquiryMailStatus>('inquiryMail')
+  const canUseForm = inquiryQ.isSuccess && inquiryQ.data.canFileInquiries === true
+
   const [form, setForm] = useState<ProfileForm>(EMPTY_FORM)
+  const formLocked = !canUseForm && !form.showContactForm
+  const savedShowForm = q.data?.content?.showContactForm === true
   const [save, setSave] = useState<SaveState>('idle')
   const [saveError, setSaveError] = useState('')
   // Share-card (og:image) regeneration status — kept SEPARATE from the profile save so
@@ -185,6 +197,11 @@ export function ProfileEditor() {
       })),
       showRates: form.showRates,
       showRatesSection: form.showRatesSection,
+      // Written only when the switch itself changed, so a save while the Gmail check is
+      // still pending can never flip the public form off on its own.
+      ...(form.showContactForm !== savedShowForm
+        ? { content: { showContactForm: form.showContactForm && canUseForm } }
+        : {}),
       isPublished: form.isPublished,
     }
     try {
@@ -511,6 +528,43 @@ export function ProfileEditor() {
               />
               <span className="field-hint">Edit per-platform in Social Stats</span>
             </div>
+          </div>
+        </section>
+
+        {/* Collaborate section */}
+        <section className="card">
+          <div className="card-head" style={{ marginBottom: 0 }}>
+            <span className="ico-badge">
+              <Mail size={18} aria-hidden="true" />
+            </span>
+            <div>
+              <h2 className="card-title">Work with me</h2>
+              <p className="card-sub">How brands reach you from your public media kit.</p>
+            </div>
+          </div>
+          <div className="field-card" style={{ marginTop: 14 }}>
+            <div>
+              <div className="fc-title">Show brief form</div>
+              <div className="fc-sub">
+                {inquiryQ.isPending
+                  ? 'Checking whether the linked Gmail can receive briefs…'
+                  : formLocked
+                    ? 'Unavailable while Gmail isn’t connected for inquiries. Connect it in Settings → Sending account first; until then your email is shown with copy and open-in-mail buttons.'
+                    : 'Off shows your email with copy and open-in-mail buttons, so brands write to you directly. On brings back the Name / Brand / Details form.'}
+              </div>
+            </div>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={form.showContactForm}
+              aria-disabled={formLocked}
+              aria-label="Show the brief form on the public media kit"
+              onClick={() => !formLocked && update('showContactForm', !form.showContactForm)}
+              className="switch"
+              style={formLocked ? { opacity: 0.5, cursor: 'not-allowed' } : undefined}
+            >
+              <span className="switch-knob" />
+            </button>
           </div>
         </section>
 

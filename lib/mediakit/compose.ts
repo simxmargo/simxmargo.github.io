@@ -1,16 +1,14 @@
-// Hand the finished brief to the VISITOR's own email client instead of sending
-// one ourselves.
+// Hand a brief to the VISITOR's own email client: the only path for the email-first
+// Collaborate panel (starterBrief), and the brief form's fallback.
 //
-// WHY: the form used to POST the brief and have the `collab` Edge Function email
-// it to the influencer FROM the influencer's own Gmail account. Gmail files a
-// self-addressed message under All Mail/Sent and does not apply the Inbox label,
-// so those notifications were effectively invisible — and pressing Reply answered
-// yourself instead of the brand.
+// The primary path is `collab` filing the brief straight into the influencer's Gmail
+// Inbox (lib/mediakit/collab.ts). This one runs only when that couldn't happen: a
+// network error, a paused free-tier Supabase project, or an inbox not yet linked.
+// Nothing here touches our infrastructure, so it still works in all of those cases,
+// and because the brand sends it themselves, Reply goes straight back to them.
 //
-// Now the brand presses send in their own client, so an ordinary email arrives
-// from an ordinary sender: it lands in the Inbox, threads properly, and Reply
-// goes back to the brand. It also survives the free-tier Supabase project being
-// paused, because nothing on this path touches our infrastructure.
+// (It was once the ONLY path: a server-sent notification from the influencer's own
+// Gmail to itself gets filed under All Mail, not the Inbox, so nobody saw them.)
 
 export type ComposeProvider = 'gmail' | 'outlook' | 'mailto'
 
@@ -71,6 +69,18 @@ export function buildBrief(i: BriefInput): Brief {
   lines.push('Thanks,', sender)
 
   return { subject: clip(subject, 150), body: lines.join('\r\n') }
+}
+
+// A near-empty draft for the email-first Collaborate panel: just the greeting, plus
+// the package when the visitor picked one from the rate list.
+export function starterBrief(toName?: string, deliverable?: string): Brief {
+  const greeting = (toName ?? '').trim().split(/\s+/)[0] || 'there'
+  const lines = [`Hi ${greeting},`, '', '']
+  if (deliverable) lines.push(`Package: ${deliverable}`)
+  return {
+    subject: clip(deliverable ? `Collab inquiry - ${deliverable}` : 'Collab inquiry', 150),
+    body: lines.join('\r\n'),
+  }
 }
 
 export function composeUrl(provider: ComposeProvider, to: string, brief: Brief): string {

@@ -55,6 +55,7 @@ function mapProfile(r: any): PublicProfile {
     pressLogos: r.press_logos ?? [],
     seo: r.seo ?? {},
     theme: r.theme ?? {},
+    content: r.content ?? {},
     isPublished: Boolean(r.is_published),
   }
 }
