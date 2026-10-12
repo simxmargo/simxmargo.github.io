@@ -15,64 +15,14 @@ export const INSIGHT_PLATFORM_LABEL: Partial<Record<Platform, string>> = {
   facebook: 'Facebook',
 }
 
-// Starting point for the admin editor ("Load starter numbers"), taken from the
-// creator's own Insights sheet. Never rendered publicly until saved + enabled.
-export const INSIGHTS_TEMPLATE: InsightPlatform[] = [
-  {
-    platform: 'tiktok',
-    charts: [
-      { title: 'Gender', slices: [{ label: 'Female', value: 68 }, { label: 'Male', value: 32 }] },
-      {
-        title: 'Age',
-        slices: [
-          { label: '18-24', value: 41.6 },
-          { label: '25-34', value: 39.9 },
-          { label: '35-44', value: 13.5 },
-          { label: '45-54', value: 4.9 },
-        ],
-      },
-      {
-        title: 'Top countries',
-        slices: [
-          { label: 'Philippines', value: 28.1 },
-          { label: 'Pakistan', value: 6.8 },
-          { label: 'Saudi Arabia', value: 6.7 },
-          { label: 'Other', value: 58.4 },
-        ],
-      },
-    ],
-  },
-  {
-    platform: 'instagram',
-    charts: [
-      { title: 'Gender', slices: [{ label: 'Female', value: 87.7 }, { label: 'Male', value: 12.3 }] },
-      {
-        title: 'Age',
-        slices: [
-          { label: '13-17', value: 12.2 },
-          { label: '18-24', value: 47.2 },
-          { label: '25-34', value: 32.8 },
-          { label: '35-44', value: 7.8 },
-        ],
-      },
-      {
-        title: 'Top countries',
-        slices: [
-          { label: 'Philippines', value: 24.8 },
-          { label: 'Indonesia', value: 16.9 },
-          { label: 'United States', value: 5.5 },
-          { label: 'Other', value: 52.8 },
-        ],
-      },
-    ],
-  },
-]
-
 /* eslint-disable @typescript-eslint/no-explicit-any */
 function cleanSlices(raw: any): InsightSlice[] {
   if (!Array.isArray(raw)) return []
   return raw
-    .map((s) => ({ label: String(s?.label ?? '').trim(), value: Number(s?.value) }))
+    .map((s) => {
+      const color = safeColor(s?.color)
+      return { label: String(s?.label ?? '').trim(), value: Number(s?.value), ...(color ? { color } : {}) }
+    })
     .filter((s) => s.label && Number.isFinite(s.value) && s.value > 0)
 }
 
@@ -91,9 +41,23 @@ export function renderableInsights(raw: Insights | undefined): InsightPlatform[]
 }
 /* eslint-enable @typescript-eslint/no-explicit-any */
 
+// A custom slice colour as stored: hex, a colour function (rgb, hsl, oklch, ...) or a
+// named colour. Shape-checked only, so nothing but a colour token reaches the markup.
+const COLOR_RE =
+  /^(#(?:[0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})|(?:rgb|hsl|hwb|lab|lch|oklab|oklch)a?\([0-9a-z\s.,%/+-]{1,60}\)|[a-z]{3,30})$/i
+
+export function safeColor(v: unknown): string | undefined {
+  if (typeof v !== 'string') return undefined
+  const c = v.trim()
+  // Keywords that parse as colours but paint nothing useful on a pie.
+  if (/^(none|inherit|initial|unset|revert|transparent|currentcolor)$/i.test(c)) return undefined
+  return COLOR_RE.test(c) ? c : undefined
+}
+
 // Slice colours. Four hues validated as a ring on the dark surface (every adjacent
 // pair, including last→first, clears the colour-blind and normal-vision floors);
-// "Other" and any slice past the fourth fall back to neutral greys.
+// "Other" and any slice past the fourth fall back to neutral greys. A slice's own colour
+// wins, but still takes its turn in the palette so its neighbours keep theirs.
 const SLICE_HUES = ['#d55181', '#3987e5', '#c98500', '#9085e9']
 const SLICE_NEUTRALS = ['#8a847a', '#5f5a52']
 
@@ -102,8 +66,9 @@ export function sliceColors(slices: InsightSlice[]): string[] {
   let neutral = 0
   return slices.map((s) => {
     const isOther = /^others?$/i.test(s.label.trim())
-    if (!isOther && hue < SLICE_HUES.length) return SLICE_HUES[hue++]
-    return SLICE_NEUTRALS[neutral++ % SLICE_NEUTRALS.length]
+    const auto =
+      !isOther && hue < SLICE_HUES.length ? SLICE_HUES[hue++] : SLICE_NEUTRALS[neutral++ % SLICE_NEUTRALS.length]
+    return safeColor(s.color) ?? auto
   })
 }
 

@@ -81,6 +81,8 @@ export type ProfileContent = SiteCopy & {
 export interface InsightSlice {
   label: string
   value: number
+  /** Any CSS colour; unset = the automatic palette. */
+  color?: string
 }
 export interface InsightChart {
   title: string

@@ -10,7 +10,7 @@ import type { InsightChart, InsightPlatform, Insights, Platform, PublicProfile }
 import {
   INSIGHT_PLATFORMS,
   INSIGHT_PLATFORM_LABEL,
-  INSIGHTS_TEMPLATE,
+  safeColor,
   sliceColors,
   formatPercent,
 } from '@/lib/mediakit/insights'
@@ -23,6 +23,8 @@ import {
 interface SliceRow {
   label: string
   value: string
+  // Typed colour; blank = automatic.
+  color: string
 }
 interface ChartRow {
   title: string
@@ -38,7 +40,25 @@ type SaveState = 'idle' | 'saving' | 'saved' | 'error'
 
 const EMPTY_FORM: InsightsForm = { enabled: false, charts: {}, extra: [] }
 
-const emptySlice = (): SliceRow => ({ label: '', value: '' })
+const emptySlice = (): SliceRow => ({ label: '', value: '', color: '' })
+
+// A colour the browser can actually paint (the stored shape check also lets "banana" through).
+function validColor(v: string): string | undefined {
+  const c = safeColor(v)
+  return c && typeof CSS !== 'undefined' && CSS.supports('color', c) ? c : undefined
+}
+
+// Any CSS colour as #rrggbb, which is all the native colour picker accepts.
+function toHex(color: string): string {
+  if (/^#[0-9a-f]{6}$/i.test(color)) return color
+  if (typeof document === 'undefined') return '#000000'
+  const ctx = document.createElement('canvas').getContext('2d')
+  if (!ctx) return '#000000'
+  ctx.fillStyle = color
+  ctx.fillRect(0, 0, 1, 1)
+  const [r, g, b] = ctx.getImageData(0, 0, 1, 1).data
+  return `#${[r, g, b].map((n) => n.toString(16).padStart(2, '0')).join('')}`
+}
 const newChart = (title: string): ChartRow => ({ title, slices: [emptySlice(), emptySlice()] })
 
 // Quick "add chart" presets; the blank one is rendered separately.
@@ -52,19 +72,20 @@ function toChartRows(raw: any): ChartRow[] {
     slices: (Array.isArray(c?.slices) ? c.slices : []).map((s: any) => ({
       label: String(s?.label ?? ''),
       value: s?.value == null ? '' : String(s.value),
+      color: typeof s?.color === 'string' ? s.color : '',
     })),
   }))
 }
 
 // jsonb is untyped at rest, so read defensively. Every offered platform gets an entry.
-function toForm(insights: Insights | undefined, enabled = insights?.enabled === true): InsightsForm {
+function toForm(insights: Insights | undefined): InsightsForm {
   const saved: any[] = Array.isArray(insights?.platforms) ? insights.platforms : []
   const charts: InsightsForm['charts'] = {}
   for (const p of INSIGHT_PLATFORMS) {
     charts[p] = toChartRows(saved.find((s) => s?.platform === p)?.charts)
   }
   return {
-    enabled,
+    enabled: insights?.enabled === true,
     charts,
     extra: saved.filter((s) => typeof s?.platform === 'string' && !INSIGHT_PLATFORMS.includes(s.platform)),
   }
@@ -82,7 +103,10 @@ function cleanCharts(rows: ChartRow[]): InsightChart[] {
   return rows
     .map((c) => ({
       title: c.title.trim(),
-      slices: c.slices.filter(isFilled).map((s) => ({ label: s.label.trim(), value: Number(s.value) })),
+      slices: c.slices.filter(isFilled).map((s) => {
+        const color = validColor(s.color)
+        return { label: s.label.trim(), value: Number(s.value), ...(color ? { color } : {}) }
+      }),
     }))
     .filter((c) => c.slices.length > 0)
 }
@@ -94,8 +118,6 @@ export function InsightsEditor() {
   const [form, setForm] = useState<InsightsForm>(EMPTY_FORM)
   const [save, setSave] = useState<SaveState>('idle')
   const [saveError, setSaveError] = useState('')
-  // Second step of the "Load starter numbers" button when the form already has data.
-  const [confirmStarter, setConfirmStarter] = useState(false)
 
   // Seed from the shared cache; stable while cached so revisiting never clobbers edits.
   useEffect(() => {
@@ -104,7 +126,6 @@ export function InsightsEditor() {
 
   function touch() {
     if (save !== 'idle') setSave('idle')
-    if (confirmStarter) setConfirmStarter(false)
   }
 
   function setCharts(platform: Platform, fn: (charts: ChartRow[]) => ChartRow[]) {
@@ -121,19 +142,6 @@ export function InsightsEditor() {
       ...c,
       slices: c.slices.map((s, i) => (i === si ? { ...s, ...patch } : s)),
     }))
-  }
-
-  const hasData = INSIGHT_PLATFORMS.some((p) => (form.charts[p] ?? []).length > 0)
-
-  // Fills the form only — nothing is saved until Save. Keeps the current on/off switch.
-  function loadStarter() {
-    if (hasData && !confirmStarter) {
-      setConfirmStarter(true)
-      return
-    }
-    setForm((f) => ({ ...toForm({ platforms: INSIGHTS_TEMPLATE }, f.enabled), extra: f.extra }))
-    setConfirmStarter(false)
-    if (save !== 'idle') setSave('idle')
   }
 
   async function onSubmit(e: FormEvent) {
@@ -203,7 +211,7 @@ export function InsightsEditor() {
       </header>
 
       <div className="stack">
-        {/* Visibility + starter numbers */}
+        {/* Visibility */}
         <section className="card">
           <div className="card-head" style={{ marginBottom: 0 }}>
             <span className="ico-badge"><PieChart size={18} aria-hidden="true" /></span>
@@ -232,23 +240,6 @@ export function InsightsEditor() {
                 <span className="switch-knob" />
               </button>
             </div>
-
-            <div className="field-card">
-              <div>
-                <div className="fc-title">Starter numbers</div>
-                <div className="fc-sub">Fills the form with a ready-made set to edit. Nothing is saved until you press Save.</div>
-              </div>
-              <div className="flex flex-wrap items-center justify-end gap-2">
-                <button type="button" onClick={loadStarter} className={`btn btn-sm ${confirmStarter ? 'btn-danger' : 'btn-ghost'}`}>
-                  {confirmStarter ? 'Replace current numbers?' : 'Load starter numbers'}
-                </button>
-                {confirmStarter && (
-                  <button type="button" onClick={() => setConfirmStarter(false)} className="btn btn-ghost btn-sm">
-                    Cancel
-                  </button>
-                )}
-              </div>
-            </div>
           </div>
         </section>
 
@@ -273,7 +264,7 @@ export function InsightsEditor() {
                     const chartName = chart.title.trim() || `chart ${ci + 1}`
                     // Colour only the rows that will be saved, so swatches match the public pie.
                     const kept = chart.slices.filter(isFilled)
-                    const colors = sliceColors(kept.map((s) => ({ label: s.label, value: Number(s.value) })))
+                    const colors = sliceColors(kept.map((s) => ({ label: s.label, value: Number(s.value), color: validColor(s.color) })))
                     const total = kept.reduce((sum, s) => sum + Number(s.value), 0)
                     const offTotal = kept.length > 0 && Math.abs(total - 100) > 0.5
                     let keptIdx = 0
@@ -309,19 +300,32 @@ export function InsightsEditor() {
                           {chart.slices.map((slice, si) => {
                             const color = isFilled(slice) ? colors[keptIdx++] : undefined
                             const rowName = `${name} ${chartName} slice ${si + 1}`
+                            const colorBad = slice.color.trim() !== '' && !validColor(slice.color)
                             return (
-                              <div key={si} className="grid items-center gap-3 grid-cols-[auto_1fr_6.5rem_auto]">
-                                {/* Swatch = the colour this slice gets; hollow until the row is filled in. */}
-                                <span
-                                  aria-hidden="true"
+                              <div key={si} className="grid items-center gap-3 grid-cols-[auto_1fr_6.5rem_auto] sm:grid-cols-[auto_1fr_9.5rem_6.5rem_auto]">
+                                {/* Swatch = the colour this slice gets (hollow until the row is filled in).
+                                    Clicking it opens the browser's colour picker. */}
+                                <label
+                                  className="swatch-pick"
+                                  title="Pick a colour"
                                   style={{
-                                    width: 14,
-                                    height: 14,
-                                    borderRadius: 4,
+                                    position: 'relative',
+                                    width: 26,
+                                    height: 26,
+                                    borderRadius: 6,
+                                    cursor: 'pointer',
                                     background: color ?? 'transparent',
-                                    border: color ? 'none' : '1px dashed var(--line)',
+                                    border: color ? '1px solid var(--line)' : '1px dashed var(--line)',
                                   }}
-                                />
+                                >
+                                  <input
+                                    type="color"
+                                    value={toHex(color ?? validColor(slice.color) ?? '#888888')}
+                                    onChange={(e) => updateSlice(platform, ci, si, { color: e.target.value })}
+                                    aria-label={`${rowName} colour picker`}
+                                    style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', opacity: 0, cursor: 'pointer' }}
+                                  />
+                                </label>
                                 <input
                                   type="text"
                                   value={slice.label}
@@ -329,6 +333,20 @@ export function InsightsEditor() {
                                   aria-label={`${rowName} label`}
                                   className="input"
                                   placeholder="Label"
+                                />
+                                {/* Any CSS colour: #hex, rgb(), hsl(), a name. Blank = automatic. */}
+                                <input
+                                  type="text"
+                                  value={slice.color}
+                                  onChange={(e) => updateSlice(platform, ci, si, { color: e.target.value })}
+                                  aria-label={`${rowName} colour`}
+                                  aria-invalid={colorBad}
+                                  title={colorBad ? 'Not a colour the browser recognises; the automatic colour is used.' : undefined}
+                                  className="input order-last col-span-full sm:order-none sm:col-span-1"
+                                  style={colorBad ? { borderColor: 'var(--danger, #e66767)' } : undefined}
+                                  placeholder="Auto colour"
+                                  spellCheck={false}
+                                  autoCapitalize="off"
                                 />
                                 <input
                                   type="number"

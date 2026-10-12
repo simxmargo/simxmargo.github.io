@@ -857,6 +857,8 @@ body {
 .studio .muted-sm { font-size: 11.5px; color: var(--faint); font-weight: 500; }
 
 /* Switch (toggles) */
+/* The colour input inside is invisible, so the swatch shows its focus. */
+.studio .swatch-pick:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
 .studio .switch { position: relative; display: inline-flex; height: 26px; width: 46px; flex: none; align-items: center; border-radius: 999px; background: var(--line); transition: background 0.18s; cursor: pointer; border: none; }
 .studio .switch[aria-checked='true'] { background: var(--accent); }
 .studio .switch-knob { display: inline-block; height: 20px; width: 20px; border-radius: 50%; background: #fff; transform: translateX(3px); transition: transform 0.18s; }
