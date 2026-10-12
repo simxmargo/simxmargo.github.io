@@ -355,11 +355,27 @@ path is worth the ~$7.
 
 > **Not SMTP — the API.** Outreach sends via `gmail.googleapis.com/gmail/v1/users/me/messages/send`
 > with an OAuth refresh token (`_shared/gmail.ts` → `_shared/sendPitch.ts`). SMTP with a
-> Google App Password exists in exactly one place, the **`collab`** function, which
-> notifies the inbox about a Work-with-me inquiry — a different job with a different
-> credential. Worth stating because "the Gmail SMTP setup" is a natural shorthand for
-> both, and they fail for different reasons: OAuth dies with `invalid_grant` (flip the
-> consent app to Production), SMTP dies with a rejected app password.
+> Google App Password survives in exactly one place, the **`collab`** function, as its
+> LAST-RESORT notification when both the DB write and Gmail filing fail. They fail for
+> different reasons: OAuth dies with `invalid_grant` (flip the consent app to
+> Production), SMTP dies with a rejected app password.
+>
+> **Collab inquiries are FILED, not sent (2026-09-15).** The inquiry inbox is the same
+> account the studio connects, so a notification email is a self-send — Gmail files
+> those under All Mail with no Inbox label, which is why they went unseen. `collab`
+> now calls `users.messages.import` (scope `gmail.insert`, Restricted) with the
+> `INBOX`+`UNREAD` labels: nothing is sent, no send volume is spent on the outreach
+> account, and — unlike `messages.insert` — Gmail still runs delivery scanning on the
+> anonymous form content. The From is `"<Name> via media kit" <media-kit@simxmargo.invalid>`,
+> never the typed address (attacker-controlled → a planted phishing email) nor the
+> account's own (listed as "me"); Reply-To carries the brand. Limits: 5 submissions per IP
+> per hour (best effort — forwarding headers are forgeable) under a hard **20 per hour
+> total** that no header moves (counted on `collab_inquiries` rows, filed or not; a
+> count error fails closed, a missing IP skips only the per-IP check). Filing has a 10s deadline so the
+> response always beats the form's 20s client timeout.
+> The response carries `filed`; when it's false (no `gmail.insert` grant yet, Gmail
+> down, throttled) the public form falls back to opening the brand's own mail app.
+> Settings reads `inquiry_mail_status()` (migration 0020) to prompt the reconnect.
 
 Implemented as the **`gmail-oauth` Edge Function** + migration
 `0012_sending_account.sql` + `components/admin/SendingAccountCard.tsx`.

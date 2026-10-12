@@ -92,6 +92,26 @@ export async function readSendingSafety(): Promise<SendingSafety> {
   }
 }
 
+export interface InquiryMailStatus {
+  /** true once the account was connected with gmail.insert — collab inquiries get filed to its Inbox. */
+  canFileInquiries: boolean
+}
+
+// Whether public "Work with me" inquiries can be filed into the linked Gmail Inbox.
+// Own RPC for the same reason as sending_safety_status: a function's return shape
+// can't be widened in place. No row (is_admin() said no) means "no"; an RPC error is
+// thrown, so the card shows it rather than a reconnect prompt that can never succeed.
+export async function readInquiryMailStatus(): Promise<InquiryMailStatus> {
+  const sb = supabaseBrowser
+  if (!sb) throw new Error('Studio is not configured.')
+
+  const { data, error } = await sb.rpc('inquiry_mail_status').maybeSingle()
+  if (error) throw new Error(error.message)
+  if (!data) return { canFileInquiries: false }
+
+  return { canFileInquiries: (data as Record<string, unknown>).can_file_inquiries === true }
+}
+
 // The bounce breaker's evidence: when each currently-bounced contact was emailed,
 // inside the rolling window. Feeds lib/outreach/pauseMath.ts `estimateResumeAt` so
 // the Sending safety card can say when an auto pause will lift. Display-only —

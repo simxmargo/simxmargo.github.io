@@ -32,12 +32,22 @@ const TIMEOUT_MS = 15_000
 // through "Advanced" once when reconnecting. Accounts connected before this scope
 // was added keep working for SENDING; the bounce sweep checks the granted scope
 // string and simply skips until a reconnect grants it.
+//
+// gmail.insert files collab inquiries straight into the Inbox (importMessage below).
+// Also Restricted, so it rides the same one-time warning; accounts connected before it
+// keep sending and simply don't get inquiries filed until a reconnect grants it.
 export const GMAIL_SCOPES = [
   'openid',
   'email',
   'https://www.googleapis.com/auth/gmail.send',
   'https://www.googleapis.com/auth/gmail.readonly',
+  'https://www.googleapis.com/auth/gmail.insert',
 ]
+
+// Any of these on the granted scope string authorizes users.messages.import.
+export function canImportMessages(scope: string): boolean {
+  return /gmail\.insert|gmail\.modify|https:\/\/mail\.google\.com\//.test(scope)
+}
 
 export interface GoogleCreds {
   clientId: string
@@ -304,6 +314,43 @@ export async function sendMessage(accessToken: string, msg: OutgoingMessage): Pr
 
   const sent = body as { id?: string; threadId?: string }
   return { id: sent.id ?? '', threadId: sent.threadId ?? '' }
+}
+
+// ── Filing (collab inquiries) ─────────────────────────────────────────────────────
+//
+// users.messages.import places a message in THIS account's mailbox without sending
+// anything. That is the whole point: the inquiry inbox IS the connected account, and a
+// self-addressed send gets filed under All Mail with no Inbox label — which is how
+// the old notifications went unseen. Import applies the labels we pass, costs no send
+// volume on an outreach account whose reputation is being protected, and — unlike
+// messages.insert — runs Gmail's normal delivery scanning, which matters because the
+// content comes from an anonymous public form.
+
+const IMPORT_URL = 'https://gmail.googleapis.com/gmail/v1/users/me/messages/import'
+
+export async function importMessage(accessToken: string, msg: OutgoingMessage): Promise<SentMessage> {
+  // neverMarkSpam: the form's own honeypot, validation and rate limit already screened
+  // it, and a lead silently filed under Spam is the failure this exists to prevent.
+  const url = `${IMPORT_URL}?neverMarkSpam=true&internalDateSource=receivedTime`
+  let res: Response
+  try {
+    res = await fetch(url, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${accessToken}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ raw: base64Url(buildMime(msg)), labelIds: ['INBOX', 'UNREAD'] }),
+      signal: AbortSignal.timeout(TIMEOUT_MS),
+    })
+  } catch (e) {
+    throw new GoogleAuthError(`Could not reach Gmail: ${(e as Error).message}`)
+  }
+
+  const body = await res.json().catch(() => ({}) as Record<string, unknown>)
+  if (!res.ok) {
+    const err = (body as { error?: { message?: string } }).error
+    throw new GoogleAuthError(err?.message || `http_${res.status}`, res.status === 401)
+  }
+  const filed = body as { id?: string; threadId?: string }
+  return { id: filed.id ?? '', threadId: filed.threadId ?? '' }
 }
 
 // ── Reading (bounce detection only) ─────────────────────────────────────────────

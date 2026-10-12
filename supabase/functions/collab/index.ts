@@ -1,39 +1,67 @@
-// `collab` Edge Function — public "Work with me" submissions → a record in
-// Supabase, plus (when asked) an email notification to the influencer's inbox.
+// `collab` Edge Function — public "Work with me" submissions → a record in the studio
+// Inbox, FILED into the influencer's Gmail Inbox.
 //
 // The static site has no server, so the public media-kit form POSTs here (via
 // supabase.functions.invoke in lib/mediakit/collab.ts). Honeypot + server-side
 // validation mirroring the DB CHECKs run first.
 //
-// NOTIFICATION: the public form now composes the brief in the VISITOR's own mail
-// client (lib/mediakit/compose.ts) and posts `notify: false`, so this function's
-// self-addressed email would be a duplicate — Gmail files those under All Mail
-// rather than the Inbox, which is why they went unnoticed. The send still fires
-// unconditionally when the DB write FAILS (see 3b), so no lead is lost silently.
+// DELIVERY: the inquiry inbox is the same Gmail account the studio connects for
+// outreach, so an emailed notification is a self-send — and Gmail files those under
+// All Mail without the Inbox label, which is why the old SMTP notifications went
+// unseen (and why the form spent a while opening the brand's own mail app instead,
+// losing every brief the brand never pressed Send on). The brief is now IMPORTED
+// into that mailbox with the Inbox + Unread labels (users.messages.import): nothing
+// is sent, so it can't be misfiled and costs the outreach account no send volume.
 //
-// FLOW (fast confirm + resilience): the email send is KICKED OFF FIRST and runs
-// CONCURRENTLY with the DB insert. As soon as the DB durably captures the row we
-// return `ok` and let the ~7s SMTP send finish in the BACKGROUND (EdgeRuntime.
-// waitUntil) — so the public form's "Sending..." clears in ~300ms instead of ~7s.
-// If the DB write FAILS, the email becomes the sole channel, so we AWAIT it and
-// report its real outcome. No inquiry is ever lost; the request only fails (502)
-// if BOTH channels fail.
+// The response says `filed`. When filing isn't possible — account not connected, the
+// gmail.insert scope not granted yet, Gmail down, or the per-IP limit hit — the form
+// falls back to opening the brand's mail app, so a brief is never left only in a
+// studio the influencer may not open.
 //
-// Transport: Gmail SMTP — set GMAIL_SMTP_PASSWORD (a Google App Password for
-// simxmargo.collabs@gmail.com; the account needs 2-Step Verification ON).
-// Gmail→same-Gmail, so deliverability is a non-issue. Optional GMAIL_SMTP_USER
-// overrides the account; optional COLLAB_NOTIFY_TO overrides the recipient.
+// SMTP (GMAIL_SMTP_PASSWORD, a Google App Password) survives only as the last resort
+// when the DB write AND filing both fail: a lead under All Mail beats a lead nowhere.
 //
 // Deploy:  ./node_modules/.bin/supabase functions deploy collab --no-verify-jwt --use-api
-//   --no-verify-jwt because this is a PUBLIC endpoint; the honeypot + RLS + DB
-//   CHECKs are the protection, not a JWT.
+//   --no-verify-jwt because this is a PUBLIC endpoint; the honeypot + validation +
+//   per-IP limit + RLS are the protection, not a JWT.
 
-import { createClient } from 'jsr:@supabase/supabase-js@2'
+import { createClient, type SupabaseClient } from 'jsr:@supabase/supabase-js@2'
 import { SMTPClient } from 'https://deno.land/x/denomailer@1.6.0/mod.ts'
 import { json, preflight } from '../_shared/http.ts'
+import {
+  canImportMessages,
+  googleCreds,
+  GoogleAuthError,
+  importMessage,
+  refreshAccessToken,
+} from '../_shared/gmail.ts'
 
 const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/
 const IP_SALT = 'simxmargo-collab-v1' // not a secret; just so stored hashes aren't a plain-IP rainbow lookup
+
+// Filing limits. The endpoint is public and every filed brief is a message in the
+// influencer's real Inbox, so a script must not be able to fill it. Past either limit a
+// submission still lands in the studio for triage; it just isn't filed.
+//
+// The per-IP limit is best effort only: the client IP comes from forwarding headers a
+// caller can forge, so rotating a fake address resets it. The GLOBAL ceiling is the
+// guarantee — no header moves it. Real volume is a few briefs a month, so 20 an hour
+// only ever binds on a flood, and a legitimate brand caught in one is sent to the
+// mail-app fallback rather than lost.
+const FILE_PER_IP_PER_HOUR = 5
+const FILE_PER_HOUR_TOTAL = 20
+
+// Filing must answer well inside the form's 20s client timeout (lib/mediakit/collab.ts).
+// Past this the brief is reported unfiled and the brand gets the fallback; if Gmail
+// still accepts it late, the cost is a duplicate — never a lost lead.
+const FILE_DEADLINE_MS = 10_000
+
+// The From on a filed brief. Never the brand's typed address: that field is
+// attacker-controlled, and a filed message "from security@google.com" would be a
+// phishing email planted in the influencer's own Inbox. Never the account's own
+// address either, or Gmail lists every inquiry as "me". `.invalid` is reserved
+// (RFC 2606) so it can't belong to anyone; replies go to the brand via Reply-To.
+const FILED_FROM = 'media-kit@simxmargo.invalid'
 
 async function sha256Hex(input: string): Promise<string> {
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(input))
@@ -51,17 +79,16 @@ const PUNCT: Record<string, string> = {
   '“': '"', '”': '"', // curly double quotes
   '…': '...', // ellipsis
   '·': '-', '•': '-', // middle dot / bullet
-  ' ': ' ', // non-breaking space
+  '\u00A0': ' ', // non-breaking space
 }
-const PUNCT_RE = /[—–‒‘’“”…·• ]/g
+const PUNCT_RE = /[—–‒‘’“”…·•\u00A0]/g
 function normalizePunct(s: string): string {
   return s.replace(PUNCT_RE, (c) => PUNCT[c] ?? c)
 }
 
 // Escape user-supplied text before interpolating it into the HTML email body, so
 // a brand's message can't break the markup (or inject). The body may keep
-// non-ASCII (accented names etc.) — quoted-printable handles that fine; only the
-// SUBJECT must stay strict ASCII (see asciiSubject).
+// non-ASCII (accented names etc.); only the SUBJECT must stay strict ASCII.
 function escapeHtml(s: string): string {
   return s
     .replace(/&/g, '&amp;')
@@ -70,22 +97,9 @@ function escapeHtml(s: string): string {
     .replace(/"/g, '&quot;')
 }
 
-// Run a promise to completion AFTER the HTTP response is returned, using the
-// Supabase Edge global. Returns false if the runtime can't background (then the
-// caller must await instead, so the work isn't dropped).
-function runInBackground(p: Promise<unknown>): boolean {
-  // @ts-ignore EdgeRuntime is a Supabase Edge Functions global
-  const er = typeof EdgeRuntime !== 'undefined' ? EdgeRuntime : undefined
-  if (er && typeof er.waitUntil === 'function') {
-    er.waitUntil(p.catch(() => {}))
-    return true
-  }
-  return false
-}
-
 // Subjects MUST be a clean single-line header. Normalize punctuation, strip any
-// remaining non-printable-ASCII, collapse whitespace, and cap the length so no
-// encoded-word / folding is ever produced.
+// remaining non-printable-ASCII (CR/LF included, so no header injection), collapse
+// whitespace, and cap the length so no encoded-word / folding is ever produced.
 function asciiSubject(s: string): string {
   return normalizePunct(s)
     .replace(/[^\x20-\x7E]/g, '')
@@ -94,11 +108,8 @@ function asciiSubject(s: string): string {
     .slice(0, 120)
 }
 
-// The From ADDRESS is forced to the authenticated Gmail account — you cannot send
-// AS the brand's address (that's spoofing; SPF/DKIM/DMARC block it). So the brand
-// is surfaced two ways instead: their NAME becomes the From display label (scannable
-// in the inbox) and their EMAIL becomes Reply-To (hitting Reply answers the brand).
-// Strip chars that would break/confuse a From header; hyphen-join name + company.
+// The brand's name + company as a From DISPLAY label (scannable in the inbox). The
+// address is never theirs — see FILED_FROM. Strip chars that would break a header.
 function displayNameFor(inq: Inquiry): string {
   const raw = `${inq.name}${inq.company ? ` - ${inq.company}` : ''}`
   const clean = normalizePunct(raw)
@@ -106,7 +117,7 @@ function displayNameFor(inq: Inquiry): string {
     .replace(/["<>@,;:()\\]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim()
-    .slice(0, 78)
+    .slice(0, 60)
   return clean || 'New collab brief'
 }
 
@@ -118,43 +129,6 @@ interface Inquiry {
   deliverables: string[]
   message: string
   sourcePath: string
-}
-
-// Transport — Gmail SMTP (App Password; the account needs 2-Step Verification).
-// Port 465 implicit TLS (STARTTLS on 587 is flaky from Edge Functions). The client
-// is closed in finally so a timed-out send can't leak the connection.
-async function sendViaGmail(
-  user: string,
-  pass: string,
-  from: string,
-  to: string,
-  replyTo: string,
-  subject: string,
-  text: string,
-  html: string,
-): Promise<void> {
-  const client = new SMTPClient({
-    connection: {
-      hostname: 'smtp.gmail.com',
-      port: 465,
-      tls: true,
-      auth: { username: user, password: pass },
-    },
-  })
-  try {
-    await Promise.race([
-      // multipart/alternative: plain-text for deliverability + reader fallback,
-      // HTML for the formatted (bolded) layout the influencer reads.
-      client.send({ from, to, replyTo, subject, content: text, html }),
-      new Promise((_, reject) => setTimeout(() => reject(new Error('SMTP send timed out (15s)')), 15_000)),
-    ])
-  } finally {
-    try {
-      await client.close()
-    } catch {
-      /* connection already gone */
-    }
-  }
 }
 
 // Format a receipt time in the influencer's local timezone (Manila) for the email.
@@ -170,24 +144,20 @@ function formatReceived(at: Date): string {
   }
 }
 
-// Notify the influencer. Returns true if the email was sent, false otherwise
-// (missing transport secret, or a send failure). Never throws — the caller
-// decides what to do with the outcome.
-async function notifyByEmail(inq: Inquiry, receivedAt: Date): Promise<boolean> {
-  const gmailPass = Deno.env.get('GMAIL_SMTP_PASSWORD')
-  if (!gmailPass) {
-    console.error('[collab] GMAIL_SMTP_PASSWORD not set — email notification skipped')
-    return false
-  }
-  const gmailUser = Deno.env.get('GMAIL_SMTP_USER') || 'simxmargo.collabs@gmail.com'
-  const to = Deno.env.get('COLLAB_NOTIFY_TO') || 'simxmargo.collabs@gmail.com'
+interface Notification {
+  subject: string
+  text: string
+  html: string
+}
 
-  const subject = asciiSubject(`New collab brief: ${inq.name}${inq.company ? ` (${inq.company})` : ''}`)
+// The brief as the influencer reads it — shared by Gmail filing and the SMTP fallback.
+// LAYOUT: the brand's DETAILS lead, then the Package/Budget asks, then the contact
+// block in order — Brand, Name, Email, Received.
+function composeNotification(inq: Inquiry, receivedAt: Date): Notification {
+  const subject = asciiSubject(`Collab inquiry: ${inq.name}${inq.company ? ` (${inq.company})` : ''}`)
   const received = formatReceived(receivedAt)
-  const footer = `Sent via your simxmargo media kit. Reply to answer ${inq.name} directly.`
+  const footer = `Sent through your media kit form. Reply to answer ${inq.name} directly.`
 
-  // LAYOUT (per request): the brand's DETAILS lead, then the Package/Budget asks,
-  // then the contact block in order — Brand, Name, Email, Received.
   const briefLines = [inq.message]
   if (inq.deliverables.length) briefLines.push('', `Package: ${inq.deliverables.join(', ')}`)
   if (inq.budget) briefLines.push(`Budget: ${inq.budget}`)
@@ -198,10 +168,8 @@ async function notifyByEmail(inq: Inquiry, receivedAt: Date): Promise<boolean> {
 
   const text = normalizePunct([...briefLines, '', ...contactLines, '', '---', footer].join('\n'))
 
-  // HTML alternative — plain default-Gmail typography (Arial, near-black, tight
-  // line-height). Two zones: the DETAILS lead reads like a typed message body —
-  // left-aligned, one step smaller (13px). Below it, the retained "detail card"
-  // (Package, a divider, the contact table, the bold footer) is CENTERED as a block.
+  // HTML alternative — plain default-Gmail typography. The DETAILS lead reads like a
+  // typed message body; the detail card below it is centered as a block.
   const row = (label: string, value: string) =>
     `<tr><td style="padding:2px 16px 2px 0;color:#777;vertical-align:top;white-space:nowrap;">${label}</td>` +
     `<td style="padding:2px 0;">${value}</td></tr>`
@@ -226,11 +194,142 @@ async function notifyByEmail(inq: Inquiry, receivedAt: Date): Promise<boolean> {
       `</div>`,
   )
 
-  // From: the brand's name as the display label, the authenticated account as the
-  // address (required); Reply-To (inq.email) routes replies to the brand.
+  return { subject, text, html }
+}
+
+function serviceClient(): SupabaseClient | null {
+  const url = Deno.env.get('SUPABASE_URL') ?? ''
+  const key = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
+  if (!url || !key) return null
+  return createClient(url, key, { auth: { persistSession: false, autoRefreshToken: false } })
+}
+
+// Best available client IP. Proxy headers first, then the leftmost x-forwarded-for
+// entry; none is trustworthy unless the gateway strips client copies, which is why the
+// global ceiling, not this, is what bounds a flood.
+function clientIp(req: Request): string {
+  return (
+    req.headers.get('cf-connecting-ip') ||
+    req.headers.get('x-real-ip') ||
+    (req.headers.get('x-forwarded-for') ?? '').split(',')[0]
+  ).trim()
+}
+
+// Whether filing is over either limit. Read with the service role because the table is
+// insert-only for anon. A count that errors fails CLOSED; a request with no IP skips
+// only the per-IP check and stays under the global ceiling.
+async function overFilingLimit(svc: SupabaseClient, ipHash: string): Promise<boolean> {
+  const since = new Date(Date.now() - 60 * 60 * 1000).toISOString()
+  const total = await svc
+    .from('collab_inquiries')
+    .select('id', { count: 'exact', head: true })
+    .gte('created_at', since)
+  if (total.error || (total.count ?? 0) >= FILE_PER_HOUR_TOTAL) return true
+  if (!ipHash) return false // the global ceiling above still bounds this caller
+
+  const fromIp = await svc
+    .from('collab_inquiries')
+    .select('id', { count: 'exact', head: true })
+    .eq('ip_hash', ipHash)
+    .gte('created_at', since)
+  return Boolean(fromIp.error) || (fromIp.count ?? 0) >= FILE_PER_IP_PER_HOUR
+}
+
+// Resolve with `fallback` if `p` hasn't settled in time. The work itself keeps running;
+// this only stops the response waiting on it.
+function withDeadline<T>(p: Promise<T>, ms: number, fallback: T): Promise<T> {
+  return Promise.race([p, new Promise<T>((resolve) => setTimeout(() => resolve(fallback), ms))])
+}
+
+// File the brief into the connected account's Inbox. Returns false — never throws —
+// when the account isn't connected, hasn't granted gmail.insert yet, or Gmail fails;
+// the caller reports that as "not filed" and the form falls back.
+async function fileInGmail(svc: SupabaseClient, inq: Inquiry, receivedAt: Date): Promise<boolean> {
+  const creds = googleCreds()
+  if (!creds) return false
+
+  const { data: account } = await svc
+    .from('gmail_account')
+    .select('email, refresh_token, scope')
+    .eq('id', 1)
+    .maybeSingle()
+  if (!account?.refresh_token || !account.email || !canImportMessages(account.scope ?? '')) return false
+
+  const { subject, text, html } = composeNotification(inq, receivedAt)
+  try {
+    const { accessToken } = await refreshAccessToken(creds, account.refresh_token)
+    await importMessage(accessToken, {
+      to: account.email,
+      subject,
+      text,
+      html,
+      fromEmail: FILED_FROM,
+      fromName: `${displayNameFor(inq)} via media kit`,
+      replyTo: inq.email, // pressing Reply in Gmail answers the brand
+    })
+    return true
+  } catch (err) {
+    // A rejected grant is the Settings card's to show; a transient failure is not.
+    if (err instanceof GoogleAuthError && err.invalidGrant) {
+      await svc
+        .from('gmail_account')
+        .update({
+          needs_reauth: true,
+          reauth_reason: 'Google rejected the saved token. Reconnect the account.',
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', 1)
+    }
+    console.error('[collab] gmail filing failed:', err instanceof Error ? err.message : err)
+    return false
+  }
+}
+
+// Transport for the last-resort SMTP notification. Port 465 implicit TLS (STARTTLS
+// on 587 is flaky from Edge Functions); closed in finally so a timeout can't leak it.
+async function sendViaGmail(
+  user: string,
+  pass: string,
+  from: string,
+  to: string,
+  replyTo: string,
+  n: Notification,
+): Promise<void> {
+  const client = new SMTPClient({
+    connection: {
+      hostname: 'smtp.gmail.com',
+      port: 465,
+      tls: true,
+      auth: { username: user, password: pass },
+    },
+  })
+  try {
+    await Promise.race([
+      client.send({ from, to, replyTo, subject: n.subject, content: n.text, html: n.html }),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('SMTP send timed out (15s)')), 15_000)),
+    ])
+  } finally {
+    try {
+      await client.close()
+    } catch {
+      /* connection already gone */
+    }
+  }
+}
+
+// Last resort only (see header). Returns whether it sent; never throws.
+async function notifyByEmail(inq: Inquiry, receivedAt: Date): Promise<boolean> {
+  const gmailPass = Deno.env.get('GMAIL_SMTP_PASSWORD')
+  if (!gmailPass) {
+    console.error('[collab] GMAIL_SMTP_PASSWORD not set — SMTP fallback skipped')
+    return false
+  }
+  const gmailUser = Deno.env.get('GMAIL_SMTP_USER') || 'simxmargo.collabs@gmail.com'
+  const to = Deno.env.get('COLLAB_NOTIFY_TO') || 'simxmargo.collabs@gmail.com'
+  // SMTP must send AS the authenticated account; the brand stays in the display label.
   const from = `${displayNameFor(inq)} <${gmailUser}>`
   try {
-    await sendViaGmail(gmailUser, gmailPass, from, to, inq.email, subject, text, html)
+    await sendViaGmail(gmailUser, gmailPass, from, to, inq.email, composeNotification(inq, receivedAt))
     return true
   } catch (err) {
     console.error('[collab] email notify failed:', err instanceof Error ? err.message : err)
@@ -251,9 +350,10 @@ Deno.serve(async (req) => {
   }
   if (!body) return json({ error: 'Empty body' }, 400)
 
-  // Honeypot: a bot fills the hidden "website" field. Pretend success, do nothing.
+  // Honeypot: a bot fills the hidden "website" field. Pretend it was delivered, do
+  // nothing — `filed: true` so the bot never sees the fallback composer either.
   if (typeof body.website === 'string' && body.website.trim() !== '') {
-    return json({ ok: true })
+    return json({ ok: true, filed: true })
   }
 
   const name = String(body.name ?? '').trim()
@@ -270,22 +370,25 @@ Deno.serve(async (req) => {
   const inq: Inquiry = { name, email, company, budget, deliverables, message, sourcePath }
   const receivedAt = new Date()
 
-  // The public form now hands the brief to the VISITOR's own mail client, so it
-  // posts `notify: false` — a server-sent copy would duplicate it, and a
-  // self-addressed one at that (Gmail files those outside the Inbox). Defaults to
-  // TRUE so any older cached client, or a direct caller, still gets notified.
-  const notify = body.notify !== false
+  // The current form asks to be filed. The page it replaces posts `notify: false`
+  // because it still opens the brand's own mail app — filing on top of that would
+  // hand the influencer every brief twice, so an old cached page keeps its behaviour.
+  const wantFile = body.notify !== false
 
-  // 1) Kick off the email send NOW; it runs concurrently with the DB write and
-  //    (notifyByEmail never throws) resolves to whether it was sent.
-  const emailPromise = notify ? notifyByEmail(inq, receivedAt) : null
+  const ipRaw = clientIp(req)
+  const ipHash = ipRaw ? (await sha256Hex(ipRaw + IP_SALT)).slice(0, 32) : ''
+  const svc = serviceClient()
 
-  // 2) Best-effort DB write — a triage record in the studio Inbox when online.
-  //    A failure here never loses the inquiry (the email still carries it).
+  // Counted BEFORE this insert, so the submission never counts against itself.
+  const throttled = !svc || (await overFilingLimit(svc, ipHash))
+  const fileNow = (): Promise<boolean> =>
+    svc ? withDeadline(fileInGmail(svc, inq, receivedAt), FILE_DEADLINE_MS, false) : Promise.resolve(false)
+  const attempted = wantFile && !throttled
+  const filePromise = attempted ? fileNow() : Promise.resolve(false)
+
+  // The studio record, concurrent with filing. Anon key, so it stays RLS-bound.
   let dbSaved = false
   try {
-    const ipRaw = (req.headers.get('x-forwarded-for') ?? '').split(',')[0]?.trim()
-    const ipHash = ipRaw ? (await sha256Hex(ipRaw + IP_SALT)).slice(0, 32) : ''
     const supabase = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_ANON_KEY')!, {
       auth: { persistSession: false, autoRefreshToken: false },
     })
@@ -307,19 +410,18 @@ Deno.serve(async (req) => {
     console.error('[collab] DB insert threw:', err instanceof Error ? err.message : err)
   }
 
-  // 3a) FAST PATH — the DB durably captured the brief, so confirm immediately and
-  //     let the ~7s SMTP send finish in the background (falls back to awaiting it
-  //     if this runtime can't background, so the email is never dropped).
-  if (dbSaved) {
-    if (emailPromise && !runInBackground(emailPromise)) await emailPromise
-    return json({ ok: true })
-  }
+  // Awaited rather than backgrounded: the form needs `filed` to know whether to offer
+  // the brand their own mail app instead.
+  let filed = await filePromise
+  if (dbSaved) return json({ ok: true, filed })
 
-  // 3b) DB write failed — email is now the ONLY server-side record of this brief,
-  //     so send it EVEN IF the client opted out. A duplicate notification costs
-  //     nothing; a silently dropped lead costs a deal. Await it and report the
-  //     real outcome: 502 only if BOTH channels failed.
-  const emailSent = await (emailPromise ?? notifyByEmail(inq, receivedAt))
-  if (emailSent) return json({ ok: true })
+  // DB write failed — Gmail is now the only record, so file it even if this client
+  // didn't ask. Only when it was never attempted: a retry after a timed-out import can
+  // file the brief twice (Gmail may have accepted it late) and would stack another
+  // deadline onto a response the form has already given up on. Never when throttled.
+  if (!attempted && !throttled) filed = await fileNow()
+  if (filed) return json({ ok: true, filed: true })
+
+  if (await notifyByEmail(inq, receivedAt)) return json({ ok: true, filed: false })
   return json({ error: 'Could not submit right now. Please email me directly.' }, 502)
 })

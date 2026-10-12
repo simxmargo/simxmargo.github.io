@@ -33,6 +33,13 @@ throttled or suspended; you don't want that account to be the one holding your r
      a single-owner personal app. Sending works without it; the daily bounce sweep
      (BACKEND_DESIGN §6e) simply stays off until an account is connected WITH it. If
      the account was connected before this scope existed, hit **Reconnect** once.
+   - **For collab inquiries in Gmail**, also add `https://www.googleapis.com/auth/gmail.insert`.
+     Also **Restricted** (same click-through). It lets the `collab` function file each
+     public "Work with me" inquiry straight into the Inbox, unread — it sends nothing.
+     Without it inquiries still land in the studio, and the public form falls back to
+     opening the brand's own mail app. Connected before it existed? **Reconnect** once.
+     Redeploy `gmail-oauth` (it bundles `_shared/gmail.ts`) and `collab` first, or the
+     consent screen never asks for `gmail.insert` and the Settings poll times out.
    - **Test users:** add the secondary Gmail address you'll connect
 4. ⚠️ **Publishing status → PUBLISH APP** (it stays *unverified* — that's fine, you just
    click through a warning screen once).

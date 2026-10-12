@@ -1,11 +1,12 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
-import { Mail, MailCheck, AlertTriangle, Loader2, CheckCircle2, Unplug, SendHorizonal, ShieldCheck } from 'lucide-react'
+import { Mail, MailCheck, AlertTriangle, Loader2, CheckCircle2, Unplug, SendHorizonal, ShieldCheck, Inbox } from 'lucide-react'
 import { useQueryClient } from '@tanstack/react-query'
 import {
   startGmailConnect,
   disconnectGmail,
+  type InquiryMailStatus,
   type SendingAccount,
   type SendingSafety,
 } from '@/lib/admin/resources/sendingAccount'
@@ -51,6 +52,10 @@ const POLL_TIMEOUT_MS = 3 * 60 * 1000 // give up after 3 minutes of an open popu
 
 type Phase = 'idle' | 'connecting' | 'upgrading' | 'disconnecting' | 'sending'
 
+// Which permission a re-consent is waiting on. One consent grants every scope the
+// deployed gmail-oauth asks for; this only picks the flag that proves it landed.
+type UpgradeTarget = 'bounces' | 'inquiries'
+
 function formatDay(iso: string | null): string {
   if (!iso) return ''
   const d = new Date(iso)
@@ -62,9 +67,11 @@ export function SendingAccountCard() {
   const qc = useQueryClient()
   const q = useAdminResource<SendingAccount>('sendingAccount')
   const safetyQ = useAdminResource<SendingSafety>('sendingSafety')
+  const inquiryQ = useAdminResource<InquiryMailStatus>('inquiryMail')
   const account = q.data
 
   const [phase, setPhase] = useState<Phase>('idle')
+  const [upgradeTarget, setUpgradeTarget] = useState<UpgradeTarget | null>(null)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
   const [confirmOff, setConfirmOff] = useState(false)
@@ -91,6 +98,7 @@ export function SendingAccountCard() {
     }
     popupRef.current = null
     setPhase('idle')
+    setUpgradeTarget(null)
   }
 
   async function onConnect(): Promise<void> {
@@ -133,9 +141,13 @@ export function SendingAccountCard() {
         const res = await q.refetch()
 
         if (res.data?.connected) {
-          stopPolling()
+          // Close BEFORE stopPolling, which clears the popup ref.
           popupRef.current?.close()
+          stopPolling()
           setNotice(res.data.email ? `Connected ${res.data.email}.` : 'Sending account connected.')
+          // A fresh grant carries every scope, so the scope-derived flags moved too.
+          void qc.invalidateQueries({ queryKey: adminKeys.sendingSafety })
+          void qc.invalidateQueries({ queryKey: adminKeys.inquiryMail })
           return
         }
         if (closed) {
@@ -151,13 +163,13 @@ export function SendingAccountCard() {
     }, POLL_MS)
   }
 
-  // Re-run Google consent on an ALREADY-connected account so the new gmail.readonly
-  // scope (bounce detection) lands. Same popup dance as onConnect, but the success
-  // condition differs: `connected` is true from the FIRST poll tick during a
-  // re-consent (the account never disconnects), so polling it would declare victory
-  // before Google was even opened. What actually flips on success is the stored
-  // scope string, surfaced as sending_safety_status().can_detect_bounces.
-  async function onUpgradeScopes(): Promise<void> {
+  // Re-run Google consent on an ALREADY-connected account so a newly requested scope
+  // lands (gmail.readonly for bounce detection, gmail.insert for filing inquiries).
+  // Same popup dance as onConnect, but the success condition differs: `connected` is
+  // true from the FIRST poll tick during a re-consent (the account never disconnects),
+  // so polling it would declare victory before Google was even opened. What actually
+  // flips on success is the stored scope string, surfaced by the target's status RPC.
+  async function onUpgradeScopes(target: UpgradeTarget): Promise<void> {
     setError('')
     setNotice('')
 
@@ -168,6 +180,7 @@ export function SendingAccountCard() {
     }
     popupRef.current = popup
     setPhase('upgrading')
+    setUpgradeTarget(target)
 
     let url: string
     try {
@@ -185,14 +198,25 @@ export function SendingAccountCard() {
       void (async () => {
         elapsed += POLL_MS
         const closed = popupRef.current?.closed ?? true
-        const res = await safetyQ.refetch()
+        const granted =
+          target === 'bounces'
+            ? (await safetyQ.refetch()).data?.canDetectBounces
+            : (await inquiryQ.refetch()).data?.canFileInquiries
 
-        if (res.data?.canDetectBounces) {
-          stopPolling()
+        if (granted) {
+          // Close BEFORE stopPolling, which clears the popup ref.
           popupRef.current?.close()
-          setNotice('Bounce detection enabled — dead addresses now get suppressed automatically.')
-          // scope + connected_at changed on the account row too.
+          stopPolling()
+          setNotice(
+            target === 'bounces'
+              ? 'Bounce detection enabled — dead addresses now get suppressed automatically.'
+              : 'Inquiries enabled — new collab briefs now land in this Gmail Inbox.',
+          )
+          // One consent grants every scope, so every scope-derived flag may have moved,
+          // and scope + connected_at changed on the account row too.
           void qc.invalidateQueries({ queryKey: adminKeys.sendingAccount })
+          void qc.invalidateQueries({ queryKey: adminKeys.sendingSafety })
+          void qc.invalidateQueries({ queryKey: adminKeys.inquiryMail })
           return
         }
         if (closed) {
@@ -244,6 +268,8 @@ export function SendingAccountCard() {
     } finally {
       setPhase('idle')
       void qc.invalidateQueries({ queryKey: adminKeys.sendingAccount })
+      void qc.invalidateQueries({ queryKey: adminKeys.sendingSafety })
+      void qc.invalidateQueries({ queryKey: adminKeys.inquiryMail })
     }
   }
 
@@ -313,11 +339,11 @@ export function SendingAccountCard() {
                   <button
                     type="button"
                     className="btn btn-ghost btn-sm"
-                    onClick={() => void onUpgradeScopes()}
+                    onClick={() => void onUpgradeScopes('bounces')}
                     disabled={busy}
                     title="Re-opens Google consent to grant read access for bounce detection. Expect the unverified-app warning — Advanced → continue."
                   >
-                    {phase === 'upgrading' ? (
+                    {phase === 'upgrading' && upgradeTarget === 'bounces' ? (
                       <>
                         <Loader2 size={14} className="animate-spin" aria-hidden="true" /> Waiting for Google…
                       </>
@@ -392,6 +418,41 @@ export function SendingAccountCard() {
             )}
           </div>
         </div>
+
+        {/* Public "Work with me" briefs are filed into this Inbox, which needs
+            gmail.insert. Until a reconnect grants it, the form sends brands to their
+            own mail app instead — so say what's missing and offer the one fix. */}
+        {connected && !account?.needsReauth && inquiryQ.data && (
+          <div
+            className="flex items-center gap-3"
+            style={{ marginTop: 14, flexWrap: 'wrap', justifyContent: 'space-between' }}
+          >
+            <p className="field-hint" style={{ margin: 0 }}>
+              {inquiryQ.data.canFileInquiries
+                ? 'Collab inquiries from your media kit are filed to this Inbox.'
+                : 'Collab inquiries aren’t reaching this Gmail yet — reconnect once to allow it.'}
+            </p>
+            {!inquiryQ.data.canFileInquiries && (
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                onClick={() => void onUpgradeScopes('inquiries')}
+                disabled={busy}
+                title="Re-opens Google consent to allow filing inquiries into this Inbox. Expect the unverified-app warning — Advanced → continue."
+              >
+                {phase === 'upgrading' && upgradeTarget === 'inquiries' ? (
+                  <>
+                    <Loader2 size={14} className="animate-spin" aria-hidden="true" /> Waiting for Google…
+                  </>
+                ) : (
+                  <>
+                    <Inbox size={14} aria-hidden="true" /> Send inquiries to Gmail
+                  </>
+                )}
+              </button>
+            )}
+          </div>
+        )}
 
         {/* Test send + signature preview. Only meaningful once an account is
             connected, so the whole block is gated on that rather than rendering

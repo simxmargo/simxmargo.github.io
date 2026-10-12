@@ -6,7 +6,12 @@ import { readBrands } from './resources/brands'
 import { readSocials } from './resources/socials'
 import { readInquiries } from './resources/inquiries'
 import { readSettings } from './resources/settings'
-import { readBounceEvidence, readSendingAccount, readSendingSafety } from './resources/sendingAccount'
+import {
+  readBounceEvidence,
+  readInquiryMailStatus,
+  readSendingAccount,
+  readSendingSafety,
+} from './resources/sendingAccount'
 import { readFirstSendAt, readSendQueue } from './resources/sendQueue'
 
 // Centralized admin read-cache. Each resource now reads DIRECTLY from Supabase
@@ -34,6 +39,9 @@ export const adminKeys = {
   // When each currently-bounced contact was emailed — the Sending safety card's
   // input for "an auto pause resumes around …" (0019).
   bounceEvidence: ['admin', 'bounceEvidence'] as const,
+  // Whether inquiries can be filed into the Gmail Inbox — polled on its own during a
+  // scope upgrade, like sendingSafety, so nothing else refetches with it.
+  inquiryMail: ['admin', 'inquiryMail'] as const,
   // The outreach workspace polls this while anything is counting down, so it stays a
   // key of its own — refetching the queue must never drag contacts through with it.
   sendQueue: ['admin', 'sendQueue'] as const,
@@ -52,6 +60,7 @@ const READERS = {
   sendingAccount: readSendingAccount,
   sendingSafety: readSendingSafety,
   bounceEvidence: readBounceEvidence,
+  inquiryMail: readInquiryMailStatus,
   sendQueue: readSendQueue,
   firstSendAt: readFirstSendAt,
 } as const
