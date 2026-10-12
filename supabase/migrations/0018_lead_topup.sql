@@ -148,10 +148,14 @@ update public.scrape_jobs
  where status = 'needs_browser'
    and fail_class is null;
 
+-- `attempts = 0` is what keeps this a one-time backfill. db:apply replays every
+-- migration, and without it each replay re-opened jobs the retry policy had already
+-- given up on (claim_scrape_jobs bumps attempts, so those always have attempts >= 1).
 update public.scrape_jobs
    set status = 'retry', next_attempt_at = now(), attempts = 0
  where status = 'needs_browser'
-   and fail_class in ('unreachable', 'unknown');
+   and fail_class in ('unreachable', 'unknown')
+   and attempts = 0;
 
 -- ---------------------------------------------------------------------------
 -- app_settings: the top-up knobs. Enforced in top-up-leads; this is just storage.
