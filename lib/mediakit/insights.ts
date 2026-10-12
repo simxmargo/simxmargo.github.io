@@ -1,4 +1,11 @@
-import type { InsightChart, InsightPlatform, InsightSlice, Insights, Platform } from '@/lib/mediakit-types'
+import type {
+  InsightChart,
+  InsightChartType,
+  InsightPlatform,
+  InsightSlice,
+  Insights,
+  Platform,
+} from '@/lib/mediakit-types'
 import { INK_LIGHT, PAGE_BG, hexToRgb, mix } from '@/lib/theme/contrast'
 
 // Audience-insights helpers shared by the public section and the admin editor.
@@ -14,6 +21,24 @@ export const INSIGHT_PLATFORM_LABEL: Partial<Record<Platform, string>> = {
   tiktok: 'TikTok',
   instagram: 'Instagram',
   facebook: 'Facebook',
+}
+
+export const CHART_TYPES: InsightChartType[] = ['pie', 'bars', 'split']
+
+export const CHART_TYPE_LABEL: Record<InsightChartType, string> = {
+  pie: 'Pie',
+  bars: 'Bars',
+  split: 'Split bar',
+}
+
+// The form a chart takes when none is chosen: a two-way split reads best as one
+// divided bar; an ordered range (age) or a long list as bars, since a pie with more
+// than five slices stops being readable; anything else as a pie.
+export function chartKind(chart: InsightChart): InsightChartType {
+  if (chart.type) return chart.type
+  if (chart.slices.length === 2) return 'split'
+  if (/\bage\b/i.test(chart.title) || chart.slices.length > 5) return 'bars'
+  return 'pie'
 }
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -35,7 +60,11 @@ export function renderableInsights(raw: Insights | undefined): InsightPlatform[]
     .map((p: any) => ({
       platform: p?.platform as Platform,
       charts: (Array.isArray(p?.charts) ? p.charts : [])
-        .map((c: any): InsightChart => ({ title: String(c?.title ?? '').trim(), slices: cleanSlices(c?.slices) }))
+        .map((c: any): InsightChart => ({
+          title: String(c?.title ?? '').trim(),
+          slices: cleanSlices(c?.slices),
+          ...(CHART_TYPES.includes(c?.type) ? { type: c.type as InsightChartType } : {}),
+        }))
         .filter((c: InsightChart) => c.slices.length > 0),
     }))
     .filter((p) => ALL_PLATFORMS.includes(p.platform) && p.charts.length > 0)
@@ -80,8 +109,7 @@ function hslToHex(h: number, s: number, l: number): string {
 // The automatic slice colours: the kit's accent exactly as the buttons use it, then
 // a full spread of other hues stepped around the colour wheel from it, so slices are
 // easy to tell apart (this order keeps every neighbouring pair distinct for
-// colour-blind readers too). "Other" and any slice past the fifth take a quiet grey or the
-// cream ink.
+// colour-blind readers too). "Other" and any slice past the fifth take a warm grey.
 export function themePalette(accent?: string): { hues: string[]; neutrals: string[] } {
   const primary = accent && hexToRgb(accent) ? accent : DEFAULT_ACCENT
   const [h] = hexToHsl(primary)
@@ -93,7 +121,8 @@ export function themePalette(accent?: string): { hues: string[]; neutrals: strin
       hslToHex(h + 212, 0.74, 0.62), // blue
       hslToHex(h - 24, 0.74, 0.62), // rose
     ],
-    neutrals: [mix(INK_LIGHT, PAGE_BG, 0.62), INK_LIGHT],
+    // [0] is "Other"; the rest are shared out among slices past the last hue.
+    neutrals: [mix(INK_LIGHT, PAGE_BG, 0.62), mix(INK_LIGHT, PAGE_BG, 0.32), mix(INK_LIGHT, PAGE_BG, 0.48)],
   }
 }
 
@@ -105,7 +134,11 @@ export function sliceColors(slices: InsightSlice[], accent?: string): string[] {
   let neutral = 0
   return slices.map((s) => {
     const isOther = /^others?$/i.test(s.label.trim())
-    const auto = !isOther && hue < hues.length ? hues[hue++] : neutrals[neutral++ % neutrals.length]
+    const auto = isOther
+      ? neutrals[0]
+      : hue < hues.length
+        ? hues[hue++]
+        : neutrals[1 + (neutral++ % (neutrals.length - 1))]
     return safeColor(s.color) ?? auto
   })
 }

@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState, type CSSProperties } from 'react'
 import type { InsightChart, InsightPlatform, InsightSlice } from '@/lib/mediakit-types'
-import { INSIGHT_PLATFORM_LABEL, formatPercent, sliceColors } from '@/lib/mediakit/insights'
+import { INSIGHT_PLATFORM_LABEL, chartKind, formatPercent, sliceColors } from '@/lib/mediakit/insights'
 import { BrandGlyph } from '@/components/icons/BrandGlyph'
 
 interface InsightsSectionProps {
@@ -217,6 +217,95 @@ function Pie({
   )
 }
 
+interface ChartProps {
+  chart: InsightChart
+  drawn: boolean
+  delay: number
+  accent?: string
+}
+
+// One row per slice: name and figure above a bar sized against the largest slice.
+function Bars({ chart, drawn, delay, accent }: ChartProps) {
+  const [active, setActive] = useState<number | null>(null)
+  const colors = sliceColors(chart.slices, accent)
+  const max = Math.max(...chart.slices.map((s) => s.value))
+  const stateOf = (i: number) => (active === null ? '' : active === i ? ' is-active' : ' is-dim')
+  return (
+    <div className="ins-chart" onMouseLeave={() => setActive(null)}>
+      {chart.title && <div className="label ins-chart-t">{chart.title}</div>}
+      <ul className={`bar-list${drawn ? ' is-in' : ''}`} style={{ '--delay': `${delay}ms` } as CSSProperties}>
+        {chart.slices.map((s, i) => (
+          <li key={i}>
+            <button
+              type="button"
+              className={`bar-row${stateOf(i)}`}
+              onMouseEnter={() => setActive(i)}
+              onFocus={() => setActive(i)}
+              onBlur={() => setActive(null)}
+              onClick={() => setActive(active === i ? null : i)}
+            >
+              <span className="bar-head">
+                <span className="bar-l">{s.label}</span>
+                <span className="bar-v">{formatPercent(s.value)}</span>
+              </span>
+              <span className="bar-track">
+                <span
+                  className="bar-fill"
+                  style={{ width: `${r2((s.value / max) * 100)}%`, background: colors[i], '--i': i } as CSSProperties}
+                />
+              </span>
+            </button>
+          </li>
+        ))}
+      </ul>
+    </div>
+  )
+}
+
+// One bar divided between the slices, with each share spelled out underneath.
+function Split({ chart, drawn, delay, accent }: ChartProps) {
+  const [active, setActive] = useState<number | null>(null)
+  const colors = sliceColors(chart.slices, accent)
+  const stateOf = (i: number) => (active === null ? '' : active === i ? ' is-active' : ' is-dim')
+  return (
+    <div className="ins-chart" onMouseLeave={() => setActive(null)}>
+      {chart.title && <div className="label ins-chart-t">{chart.title}</div>}
+      <div className={`split${drawn ? ' is-in' : ''}`} style={{ '--delay': `${delay}ms` } as CSSProperties}>
+        <div className="split-bar" aria-hidden="true">
+          {chart.slices.map((s, i) => (
+            <span
+              key={i}
+              className={`split-seg${stateOf(i)}`}
+              style={{ flex: `${s.value} 1 0`, background: colors[i] }}
+              onMouseEnter={() => setActive(i)}
+            />
+          ))}
+        </div>
+        <ul className="split-keys">
+          {chart.slices.map((s, i) => (
+            <li key={i}>
+              <button
+                type="button"
+                className={`split-key${stateOf(i)}`}
+                onMouseEnter={() => setActive(i)}
+                onFocus={() => setActive(i)}
+                onBlur={() => setActive(null)}
+                onClick={() => setActive(active === i ? null : i)}
+              >
+                <span className="split-v">{formatPercent(s.value)}</span>
+                <span className="split-l">
+                  <span className="pie-swatch" style={{ background: colors[i] }} />
+                  {s.label}
+                </span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      </div>
+    </div>
+  )
+}
+
 function PlatformRow({ platform, accent }: { platform: InsightPlatform; accent?: string }) {
   const { ref, seen } = useSeen<HTMLDivElement>()
   const name = INSIGHT_PLATFORM_LABEL[platform.platform] ?? platform.platform
@@ -229,9 +318,13 @@ function PlatformRow({ platform, accent }: { platform: InsightPlatform; accent?:
         </h3>
       </div>
       <div className="ins-charts">
-        {platform.charts.map((chart, i) => (
-          <Pie key={i} id={`ins-${platform.platform}-${i}`} chart={chart} drawn={seen} delay={i * 140} accent={accent} />
-        ))}
+        {platform.charts.map((chart, i) => {
+          const kind = chartKind(chart)
+          const props = { chart, drawn: seen, delay: i * 140, accent }
+          if (kind === 'bars') return <Bars key={i} {...props} />
+          if (kind === 'split') return <Split key={i} {...props} />
+          return <Pie key={i} id={`ins-${platform.platform}-${i}`} {...props} />
+        })}
       </div>
     </div>
   )

@@ -445,11 +445,35 @@ body {
 .mk .pie-tag-v { font-size: 15px; font-weight: 700; line-height: 1.1; letter-spacing: -0.01em; font-variant-numeric: tabular-nums; }
 .mk .pie-tag-lbl { font-size: 12px; color: var(--muted); line-height: 1.25; max-width: 88px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .mk .pie-legend { display: none; }
+
+/* Bars: a row per slice, sized against the largest. Split: one bar divided between them. */
+.mk .ins-charts { align-items: start; }
+.mk .bar-list { list-style: none; margin: 0; padding: 22px 0 8px; display: flex; flex-direction: column; gap: 12px; max-width: 320px; margin-inline: auto; }
+.mk .bar-row { display: block; width: 100%; padding: 0; border: 0; background: none; font-family: inherit; color: var(--ink); text-align: left; cursor: pointer; transition: opacity 0.25s ease; }
+.mk .bar-row.is-dim, .mk .split-key.is-dim, .mk .split-seg.is-dim { opacity: 0.4; }
+.mk .bar-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 6px; }
+.mk .bar-l { font-size: 13px; color: var(--muted); min-width: 0; overflow-wrap: anywhere; }
+.mk .bar-v, .mk .split-v { font-weight: 700; letter-spacing: -0.01em; font-variant-numeric: tabular-nums; }
+.mk .bar-v { font-size: 15px; flex: none; }
+.mk .bar-track { display: block; height: 8px; }
+.mk .bar-fill { display: block; height: 100%; min-width: 3px; border-radius: 2px; transform: scaleX(0); transform-origin: left center; transition: transform 0.9s cubic-bezier(0.2, 0.7, 0.2, 1) calc(var(--delay, 0s) + var(--i, 0) * 90ms); }
+.mk .bar-list.is-in .bar-fill { transform: none; }
+.mk .bar-row:focus-visible, .mk .split-key:focus-visible { outline: 2px solid var(--accent-text); outline-offset: 4px; }
+.mk .split { padding: 22px 0 8px; max-width: 320px; margin-inline: auto; }
+.mk .split-bar { display: flex; gap: 2px; height: 16px; transform: scaleX(0); transform-origin: left center; transition: transform 1s cubic-bezier(0.2, 0.7, 0.2, 1) var(--delay, 0s); }
+.mk .split.is-in .split-bar { transform: none; }
+.mk .split-seg { min-width: 3px; border-radius: 2px; transition: opacity 0.25s ease; }
+.mk .split-keys { list-style: none; margin: 18px 0 0; padding: 0; display: flex; flex-wrap: wrap; gap: 16px 28px; }
+.mk .split-key { display: flex; flex-direction: column; gap: 4px; padding: 0; border: 0; background: none; font-family: inherit; color: var(--ink); text-align: left; cursor: pointer; transition: opacity 0.25s ease; }
+.mk .split-v { font-size: clamp(24px, 2.4vw, 32px); line-height: 1; }
+.mk .split-l { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); }
+.mk .split-l .pie-swatch { width: 9px; height: 9px; border-radius: 50%; flex: none; }
 @media (max-width: 1180px) {
   .mk .pie-stage { width: 148px; }
 }
 @media (max-width: 900px) {
   .mk .ins-charts { grid-template-columns: 1fr; gap: 26px; }
+  .mk .bar-list, .mk .split { max-width: none; margin-inline: 0; padding-top: 12px; }
   .mk .ins-chart-t { text-align: left; }
   .mk .ins-chart-body { justify-content: flex-start; align-items: center; gap: 22px; padding: 12px 0 0; }
   .mk .pie-stage { width: 124px; margin: 0; }
@@ -465,6 +489,7 @@ body {
 @media (hover: none) { .mk .pie-key { min-height: 44px; } }
 @media (prefers-reduced-motion: reduce) {
   .mk .pie-sweep { stroke-dasharray: 100 100; transition: none; }
+  .mk .bar-fill, .mk .split-bar { transform: none; transition: none; }
   .mk .pie-stage .pie-tag, .mk .pie-stage .pie-lead { opacity: 1; transition: none; }
   .mk .pie-wedge { transition: opacity 0.25s ease; }
   .mk .pie-wedge.is-active, .mk .pie-stage.is-in .pie-lead.is-active { transform: none; }

@@ -84,9 +84,12 @@ export interface InsightSlice {
   /** Any CSS colour; unset = the automatic palette. */
   color?: string
 }
+// How a chart is drawn. Unset = picked from its data (see chartKind in lib/mediakit/insights).
+export type InsightChartType = 'pie' | 'bars' | 'split'
 export interface InsightChart {
   title: string
   slices: InsightSlice[]
+  type?: InsightChartType
 }
 export interface InsightPlatform {
   platform: Platform

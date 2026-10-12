@@ -6,10 +6,20 @@ import { AlertTriangle, CheckCircle2, RotateCcw, PieChart, Plus, Trash2, X } fro
 import { saveProfile } from '@/lib/admin/resources/profile'
 import { useAdminResource, adminKeys, type AdminFetchError } from '@/lib/admin/queries'
 import { FormSkeleton } from '@/components/admin/Skeleton'
-import type { InsightChart, InsightPlatform, Insights, Platform, PublicProfile } from '@/lib/mediakit-types'
+import type {
+  InsightChart,
+  InsightChartType,
+  InsightPlatform,
+  Insights,
+  Platform,
+  PublicProfile,
+} from '@/lib/mediakit-types'
 import {
   INSIGHT_PLATFORMS,
   INSIGHT_PLATFORM_LABEL,
+  CHART_TYPES,
+  CHART_TYPE_LABEL,
+  chartKind,
   safeColor,
   sliceColors,
   formatPercent,
@@ -29,6 +39,8 @@ interface SliceRow {
 interface ChartRow {
   title: string
   slices: SliceRow[]
+  // '' = automatic.
+  type: InsightChartType | ''
 }
 interface InsightsForm {
   enabled: boolean
@@ -59,7 +71,7 @@ function toHex(color: string): string {
   const [r, g, b] = ctx.getImageData(0, 0, 1, 1).data
   return `#${[r, g, b].map((n) => n.toString(16).padStart(2, '0')).join('')}`
 }
-const newChart = (title: string): ChartRow => ({ title, slices: [emptySlice(), emptySlice()] })
+const newChart = (title: string): ChartRow => ({ title, slices: [emptySlice(), emptySlice()], type: '' })
 
 // Quick "add chart" presets; the blank one is rendered separately.
 const CHART_PRESETS = ['Gender', 'Age', 'Top countries']
@@ -69,6 +81,7 @@ function toChartRows(raw: any): ChartRow[] {
   if (!Array.isArray(raw)) return []
   return raw.map((c) => ({
     title: String(c?.title ?? ''),
+    type: CHART_TYPES.includes(c?.type) ? c.type : '',
     slices: (Array.isArray(c?.slices) ? c.slices : []).map((s: any) => ({
       label: String(s?.label ?? ''),
       value: s?.value == null ? '' : String(s.value),
@@ -103,6 +116,7 @@ function cleanCharts(rows: ChartRow[]): InsightChart[] {
   return rows
     .map((c) => ({
       title: c.title.trim(),
+      ...(c.type ? { type: c.type } : {}),
       slices: c.slices.filter(isFilled).map((s) => {
         const color = validColor(s.color)
         return { label: s.label.trim(), value: Number(s.value), ...(color ? { color } : {}) }
@@ -203,7 +217,7 @@ export function InsightsEditor() {
       <header className="main-head">
         <div>
           <h1 className="page-title display">Insights</h1>
-          <p className="page-sub">Audience demographics per platform — shown as pie charts on your public kit.</p>
+          <p className="page-sub">Audience demographics per platform — shown as charts on your public kit.</p>
         </div>
         <button type="submit" disabled={save === 'saving'} className="btn btn-primary">
           {save === 'saving' ? 'Saving…' : save === 'saved' ? 'Saved ✓' : 'Save changes'}
@@ -269,6 +283,8 @@ export function InsightsEditor() {
                       q.data?.theme?.accent,
                     )
                     const hasCustom = chart.slices.some((s) => s.color.trim() !== '')
+                    // What "Automatic" resolves to for this chart's current title and rows.
+                    const autoKind = chartKind({ title: chart.title, slices: kept.map((s) => ({ label: s.label, value: Number(s.value) })) })
                     const total = kept.reduce((sum, s) => sum + Number(s.value), 0)
                     const offTotal = kept.length > 0 && Math.abs(total - 100) > 0.5
                     let keptIdx = 0
@@ -298,6 +314,21 @@ export function InsightsEditor() {
                           >
                             <Trash2 size={16} aria-hidden="true" />
                           </button>
+                        </div>
+
+                        <div style={{ marginTop: 12, maxWidth: 260 }}>
+                          <label htmlFor={`in-${platform}-${ci}-type`} className="flabel">Chart style</label>
+                          <select
+                            id={`in-${platform}-${ci}-type`}
+                            value={chart.type}
+                            onChange={(e) => updateChart(platform, ci, (c) => ({ ...c, type: e.target.value as ChartRow['type'] }))}
+                            className="input"
+                          >
+                            <option value="">Automatic ({CHART_TYPE_LABEL[autoKind]})</option>
+                            {CHART_TYPES.map((t) => (
+                              <option key={t} value={t}>{CHART_TYPE_LABEL[t]}</option>
+                            ))}
+                          </select>
                         </div>
 
                         <div className="space-y-3" style={{ marginTop: 12 }}>
