@@ -102,6 +102,7 @@ export function MediaKitLive({ initial }: { initial: MediaKitData }) {
       {insights.length > 0 && (
         <InsightsSection
           platforms={insights}
+          accent={profile.theme?.accent}
           eyebrow={c.insightsEyebrow?.trim() || DEFAULT_SITE_COPY.insightsEyebrow}
           title={c.insightsTitle?.trim() || DEFAULT_SITE_COPY.insightsTitle}
         />

@@ -54,7 +54,7 @@ export function onAccentInk(accent: string): string {
 }
 
 // Mix two hex colours (t = 0 → a, 1 → b).
-function mix(a: string, b: string, t: number): string {
+export function mix(a: string, b: string, t: number): string {
   const ra = hexToRgb(a)
   const rb = hexToRgb(b)
   if (!ra || !rb) return a

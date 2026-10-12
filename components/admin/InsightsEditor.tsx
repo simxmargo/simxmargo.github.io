@@ -264,7 +264,11 @@ export function InsightsEditor() {
                     const chartName = chart.title.trim() || `chart ${ci + 1}`
                     // Colour only the rows that will be saved, so swatches match the public pie.
                     const kept = chart.slices.filter(isFilled)
-                    const colors = sliceColors(kept.map((s) => ({ label: s.label, value: Number(s.value), color: validColor(s.color) })))
+                    const colors = sliceColors(
+                      kept.map((s) => ({ label: s.label, value: Number(s.value), color: validColor(s.color) })),
+                      q.data?.theme?.accent,
+                    )
+                    const hasCustom = chart.slices.some((s) => s.color.trim() !== '')
                     const total = kept.reduce((sum, s) => sum + Number(s.value), 0)
                     const offTotal = kept.length > 0 && Math.abs(total - 100) > 0.5
                     let keptIdx = 0
@@ -344,7 +348,7 @@ export function InsightsEditor() {
                                   title={colorBad ? 'Not a colour the browser recognises; the automatic colour is used.' : undefined}
                                   className="input order-last col-span-full sm:order-none sm:col-span-1"
                                   style={colorBad ? { borderColor: 'var(--danger, #e66767)' } : undefined}
-                                  placeholder="Auto colour"
+                                  placeholder="Theme colour"
                                   spellCheck={false}
                                   autoCapitalize="off"
                                 />
@@ -374,14 +378,27 @@ export function InsightsEditor() {
                         </div>
 
                         <div className="flex flex-wrap items-center justify-between gap-3" style={{ marginTop: 12 }}>
-                          <button
-                            type="button"
-                            onClick={() => updateChart(platform, ci, (c) => ({ ...c, slices: [...c.slices, emptySlice()] }))}
-                            aria-label={`Add a slice to ${name} ${chartName}`}
-                            className="btn btn-ghost btn-sm"
-                          >
-                            <Plus size={14} aria-hidden="true" /> Add slice
-                          </button>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => updateChart(platform, ci, (c) => ({ ...c, slices: [...c.slices, emptySlice()] }))}
+                              aria-label={`Add a slice to ${name} ${chartName}`}
+                              className="btn btn-ghost btn-sm"
+                            >
+                              <Plus size={14} aria-hidden="true" /> Add slice
+                            </button>
+                            {/* Back to the theme colours for this chart. */}
+                            {hasCustom && (
+                              <button
+                                type="button"
+                                onClick={() => updateChart(platform, ci, (c) => ({ ...c, slices: c.slices.map((s) => ({ ...s, color: '' })) }))}
+                                aria-label={`Reset ${name} ${chartName} colours to the theme defaults`}
+                                className="btn btn-ghost btn-sm"
+                              >
+                                <RotateCcw size={14} aria-hidden="true" /> Reset colours
+                              </button>
+                            )}
+                          </div>
                           {/* Running total — a nudge, not an error: the public pie normalises. */}
                           <span className={`field-hint${offTotal ? ' hint-warn' : ''}`} role="status">
                             Total {formatPercent(Math.round(total * 10) / 10)}

@@ -7,6 +7,8 @@ import { BrandGlyph } from '@/components/icons/BrandGlyph'
 
 interface InsightsSectionProps {
   platforms: InsightPlatform[]
+  /** Theme accent the automatic slice colours are built from. */
+  accent?: string
   eyebrow: string
   title: string
 }
@@ -116,10 +118,22 @@ const pct = (v: number) => `${r2((v / SIZE) * 100)}%`
 // One pie with its labels around it. Hover, focus or tap a wedge or label to lift
 // that slice; the others recede. `drawn` starts the clockwise draw-in.
 // `id` must be stable across server and client renders: it names the sweep mask.
-function Pie({ chart, drawn, delay, id }: { chart: InsightChart; drawn: boolean; delay: number; id: string }) {
+function Pie({
+  chart,
+  drawn,
+  delay,
+  id,
+  accent,
+}: {
+  chart: InsightChart
+  drawn: boolean
+  delay: number
+  id: string
+  accent?: string
+}) {
   const maskId = `${id}-sweep`
   const [active, setActive] = useState<number | null>(null)
-  const colors = sliceColors(chart.slices)
+  const colors = sliceColors(chart.slices, accent)
   const wedges = layoutWedges(chart.slices)
   const stateOf = (i: number) => (active === null ? '' : active === i ? ' is-active' : ' is-dim')
   // A hovered slice slides out by this much; its leader and label ride along.
@@ -203,7 +217,7 @@ function Pie({ chart, drawn, delay, id }: { chart: InsightChart; drawn: boolean;
   )
 }
 
-function PlatformRow({ platform }: { platform: InsightPlatform }) {
+function PlatformRow({ platform, accent }: { platform: InsightPlatform; accent?: string }) {
   const { ref, seen } = useSeen<HTMLDivElement>()
   const name = INSIGHT_PLATFORM_LABEL[platform.platform] ?? platform.platform
   return (
@@ -216,7 +230,7 @@ function PlatformRow({ platform }: { platform: InsightPlatform }) {
       </div>
       <div className="ins-charts">
         {platform.charts.map((chart, i) => (
-          <Pie key={i} id={`ins-${platform.platform}-${i}`} chart={chart} drawn={seen} delay={i * 140} />
+          <Pie key={i} id={`ins-${platform.platform}-${i}`} chart={chart} drawn={seen} delay={i * 140} accent={accent} />
         ))}
       </div>
     </div>
@@ -225,7 +239,7 @@ function PlatformRow({ platform }: { platform: InsightPlatform }) {
 
 // Audience demographics: a row per platform, a pie per split (gender, age, top
 // countries). Data and visibility come from admin → Insights.
-export function InsightsSection({ platforms, eyebrow, title }: InsightsSectionProps) {
+export function InsightsSection({ platforms, accent, eyebrow, title }: InsightsSectionProps) {
   return (
     <section id="insights" className="insights">
       <div className="wrap">
@@ -236,7 +250,7 @@ export function InsightsSection({ platforms, eyebrow, title }: InsightsSectionPr
           </div>
         </div>
         {platforms.map((p) => (
-          <PlatformRow key={p.platform} platform={p} />
+          <PlatformRow key={p.platform} platform={p} accent={accent} />
         ))}
       </div>
     </section>
