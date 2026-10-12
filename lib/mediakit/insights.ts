@@ -77,15 +77,22 @@ function hslToHex(h: number, s: number, l: number): string {
   return `#${[ch(0), ch(8), ch(4)].map((v) => v.toString(16).padStart(2, '0')).join('')}`
 }
 
-// The automatic slice colours, built around the kit's accent so the pies match the
-// page: the accent exactly as the buttons use it, then its warm and cool neighbours
-// on the colour wheel. "Other" and any slice past the fourth take a quiet grey or
-// the cream ink.
+// The automatic slice colours: the kit's accent exactly as the buttons use it, then
+// a full spread of other hues stepped around the colour wheel from it, so slices are
+// easy to tell apart (this order keeps every neighbouring pair distinct for
+// colour-blind readers too). "Other" and any slice past the fifth take a quiet grey or the
+// cream ink.
 export function themePalette(accent?: string): { hues: string[]; neutrals: string[] } {
   const primary = accent && hexToRgb(accent) ? accent : DEFAULT_ACCENT
   const [h] = hexToHsl(primary)
   return {
-    hues: [primary, hslToHex(h + 28, 0.86, 0.54), hslToHex(h - 20, 0.72, 0.6), hslToHex(h + 44, 0.82, 0.62)],
+    hues: [
+      primary,
+      hslToHex(h + 40, 0.86, 0.58), // amber
+      hslToHex(h + 172, 0.62, 0.46), // teal
+      hslToHex(h + 212, 0.74, 0.62), // blue
+      hslToHex(h - 24, 0.74, 0.62), // rose
+    ],
     neutrals: [mix(INK_LIGHT, PAGE_BG, 0.62), INK_LIGHT],
   }
 }
