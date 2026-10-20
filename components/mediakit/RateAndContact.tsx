@@ -205,19 +205,15 @@ export function RateAndContact({ profile }: { profile: PublicProfile }) {
             <div>
               <div className="label reveal">{collaborateEyebrow}</div>
               <h2 className="display h2 reveal">{collaborateTitle}</h2>
-              <div className="contact-meta reveal">
-                {/* The email-first panel already headlines the address. */}
-                {showForm && (
+              {/* The email-first panel already headlines the address. */}
+              {showForm && (
+                <div className="contact-meta reveal">
                   <div className="cm-row">
                     <span className="label">Email</span>
                     <CopyEmail email={contactEmail} />
                   </div>
-                )}
-                <div className="cm-row">
-                  <span className="label">Based in</span>
-                  <span className="cm-v">{profile.location || 'Manila, Philippines'}</span>
                 </div>
-              </div>
+              )}
             </div>
 
             <div className="reveal">
