@@ -170,20 +170,28 @@ function metaDq(html: string, key: string): string {
   return m ? decodeEntities(m[1]) : ''
 }
 
+// Short links (vt.tiktok.com) redirect, so redirects are followed BY HAND: every hop must
+// stay https on the same platform's hosts before it's requested — never fetch off-platform.
 async function fetchPage(url: string, ua: string, platform: 'tiktok' | 'instagram'): Promise<{ html: string; base: URL } | null> {
+  const signal = AbortSignal.timeout(PUBLIC_TIMEOUT)
   try {
-    const res = await fetch(url, {
-      headers: { 'user-agent': ua, accept: 'text/html', 'accept-language': 'en-US,en;q=0.9' },
-      redirect: 'follow',
-      signal: AbortSignal.timeout(PUBLIC_TIMEOUT),
-    })
-    // Short links (vt.tiktok.com) redirect — only read the page if it stayed on the platform.
-    const base = new URL(res.url || url)
-    if (!res.ok || detectPlatform(base.href) !== platform) return null
-    return { html: await res.text(), base }
+    let next = new URL(url)
+    for (let hop = 0; hop <= 5; hop++) {
+      if (next.protocol !== 'https:' || detectPlatform(next.href) !== platform) return null
+      const res = await fetch(next, {
+        headers: { 'user-agent': ua, accept: 'text/html', 'accept-language': 'en-US,en;q=0.9' },
+        redirect: 'manual',
+        signal,
+      })
+      const loc = res.status >= 300 && res.status < 400 ? res.headers.get('location') : null
+      if (!loc) return res.ok ? { html: await res.text(), base: next } : null
+      await res.body?.cancel()
+      next = new URL(loc, next)
+    }
   } catch {
-    return null
+    /* bad URL / network / timeout */
   }
+  return null
 }
 
 // TikTok: the page embeds the post as JSON (__UNIVERSAL_DATA_FOR_REHYDRATION__), counts
