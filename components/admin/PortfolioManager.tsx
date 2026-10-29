@@ -851,9 +851,10 @@ function BrandEditorModal({
 // Paste (or blur) a TikTok/Instagram link → the whole card enters a loading state and the
 // `fetch-post` Edge Function auto-fills the cover (re-hosted), caption, views and likes via
 // ScrapeCreators. Auto-fill is a CONVENIENCE: every field stays editable, and if the fetch
-// fails (function not deployed / private post / out of credits) the row degrades to manual
-// entry. Each field is only overwritten when the fetch returns a value, so manual edits
-// survive a partial fetch.
+// fails (function not deployed / private post) the row degrades to manual entry. Out of
+// credits, the function falls back to the free public page and returns a `notice`. Each
+// field is only overwritten when the fetch returns a value, so manual edits survive a
+// partial fetch.
 function ContentRow({
   draft,
   onChange,
@@ -866,6 +867,9 @@ function ContentRow({
   const [fetching, setFetching] = useState(false)
   const [fetchError, setFetchError] = useState<string | null>(null)
   const [filled, setFilled] = useState(false)
+  // Set when the server fell back to the free public page (e.g. out of credits) — says
+  // which fields it couldn't get so they're typed in by hand.
+  const [notice, setNotice] = useState<string | null>(null)
   // The last URL we successfully fetched — so blur doesn't re-spend a credit on a link we
   // already pulled (a manual re-fetch via the button bypasses this).
   const fetchedUrl = useRef('')
@@ -903,6 +907,7 @@ function ContentRow({
     setFetching(true)
     setFetchError(null)
     setFilled(false)
+    setNotice(null)
     try {
       const { data, error: invokeErr } = await sb.functions.invoke('fetch-post', { body: { url: u } })
       if (invokeErr) {
@@ -919,6 +924,7 @@ function ContentRow({
         ...(data?.views != null ? { views: String(data.views) } : {}),
         ...(data?.likes != null ? { likes: String(data.likes) } : {}),
       })
+      setNotice(typeof data?.notice === 'string' ? data.notice : null)
       setFilled(true)
     } catch (err) {
       setFetchError(err instanceof Error ? err.message : 'Couldn’t auto-fill from that link.')
@@ -1009,7 +1015,7 @@ function ContentRow({
             </button>
           </span>
         ) : filled ? (
-          <span className="field-hint" style={{ color: 'var(--accent)' }}>Auto-filled from the link — edit anything below.</span>
+          <span className="field-hint" style={{ color: 'var(--accent)' }}>{notice ?? 'Auto-filled from the link — edit anything below.'}</span>
         ) : (
           <span className="field-hint">Paste a TikTok or Instagram link — cover, caption &amp; counts fill in automatically.</span>
         )}

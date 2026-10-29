@@ -8,6 +8,8 @@
 //   2. ScrapeCreators managed API does the JS-walled fetch (a plain server fetch of a
 //      TikTok/IG post only returns a JS-challenge / login-wall shell). 1 credit per call.
 //   3. Re-host the cover to the public `media` bucket (the CDN url expires in ~6h).
+//   4. No credits / no key / ScrapeCreators down → read the public post page instead (free;
+//      Instagram has no public view count) and say so in `notice`.
 //
 // ScrapeCreators single-post endpoints:
 //   TikTok:    GET /v2/tiktok/video?url=<post>
@@ -20,10 +22,19 @@
 
 import { createClient } from 'jsr:@supabase/supabase-js@2'
 import { json, preflight } from '../_shared/http.ts'
+import { decodeEntities, extractOgImage } from '../_shared/meta.ts'
 import { rehostImage } from '../_shared/rehost.ts'
 
 const SC_BASE = 'https://api.scrapecreators.com'
 const SC_TIMEOUT = 20_000
+const PUBLIC_TIMEOUT = 12_000
+
+// Free fallback when ScrapeCreators can't answer (out of credits, key missing, outage).
+// TikTok serves the full post JSON (counts included) to a normal browser; Instagram serves
+// its link-preview tags (cover, caption, likes — never views) to a link-preview crawler.
+const BROWSER_UA =
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0 Safari/537.36'
+const LINK_PREVIEW_UA = 'facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)'
 
 interface PostFields {
   thumbUrl: string // raw (expiring) cover URL — re-hosted by the handler
@@ -142,6 +153,82 @@ async function fetchPost(
   return { data: platform === 'tiktok' ? mapTikTok(j) : mapInstagram(j), status: 200 }
 }
 
+// "19K" / "1.2M" / "1,234" → number. Instagram's preview text uses the compact form.
+function compactCount(raw: string): number | null {
+  const m = raw.replace(/,/g, '').trim().match(/^(\d+(?:\.\d+)?)\s*([KMB])?$/i)
+  if (!m) return null
+  const mult = { K: 1e3, M: 1e6, B: 1e9 }[(m[2] ?? '').toUpperCase() as 'K' | 'M' | 'B'] ?? 1
+  return Math.round(Number(m[1]) * mult)
+}
+
+// Double-quoted <meta content> only: captions carry raw apostrophes ("it's"), which the
+// shared any-quote matcher in _shared/meta.ts would cut off.
+function metaDq(html: string, key: string): string {
+  const m =
+    html.match(new RegExp(`<meta[^>]+(?:property|name)="${key}"[^>]*?\\bcontent="([^"]*)"`, 'i')) ??
+    html.match(new RegExp(`<meta[^>]+\\bcontent="([^"]*)"[^>]*?(?:property|name)="${key}"`, 'i'))
+  return m ? decodeEntities(m[1]) : ''
+}
+
+async function fetchPage(url: string, ua: string, platform: 'tiktok' | 'instagram'): Promise<{ html: string; base: URL } | null> {
+  try {
+    const res = await fetch(url, {
+      headers: { 'user-agent': ua, accept: 'text/html', 'accept-language': 'en-US,en;q=0.9' },
+      redirect: 'follow',
+      signal: AbortSignal.timeout(PUBLIC_TIMEOUT),
+    })
+    // Short links (vt.tiktok.com) redirect — only read the page if it stayed on the platform.
+    const base = new URL(res.url || url)
+    if (!res.ok || detectPlatform(base.href) !== platform) return null
+    return { html: await res.text(), base }
+  } catch {
+    return null
+  }
+}
+
+// TikTok: the page embeds the post as JSON (__UNIVERSAL_DATA_FOR_REHYDRATION__), counts
+// included. If that blob is missing, fall back to the og:image cover alone.
+async function fetchTikTokPublic(url: string): Promise<PostFields | null> {
+  const page = await fetchPage(url, BROWSER_UA, 'tiktok')
+  if (!page) return null
+  const blob = page.html.match(/<script id="__UNIVERSAL_DATA_FOR_REHYDRATION__"[^>]*>([\s\S]*?)<\/script>/)
+  if (blob) {
+    try {
+      const item = JSON.parse(blob[1])?.__DEFAULT_SCOPE__?.['webapp.video-detail']?.itemInfo?.itemStruct
+      if (item) {
+        const v = item.video ?? {}
+        const s = item.stats ?? {}
+        return {
+          thumbUrl: (typeof v.dynamicCover === 'string' && v.dynamicCover) || (typeof v.cover === 'string' && v.cover) || '',
+          caption: typeof item.desc === 'string' ? item.desc : '',
+          views: scNum(s.playCount),
+          likes: scNum(s.diggCount),
+        }
+      }
+    } catch {
+      /* malformed blob — use the tags below */
+    }
+  }
+  const thumbUrl = extractOgImage(page.html, page.base)
+  return thumbUrl ? { thumbUrl, caption: '', views: null, likes: null } : null
+}
+
+// Instagram: description reads `19K likes, 43 comments - simxmargo on February 20, 2026: "caption"`.
+async function fetchInstagramPublic(url: string): Promise<PostFields | null> {
+  const page = await fetchPage(url, LINK_PREVIEW_UA, 'instagram')
+  if (!page) return null
+  const desc = metaDq(page.html, 'og:description') || metaDq(page.html, 'description')
+  const likes = desc.match(/^([\d.,]+\s*[KMB]?)\s+likes?\b/i)
+  const caption = desc.match(/:\s*"([\s\S]*)"\.?\s*$/)
+  const fields: PostFields = {
+    thumbUrl: extractOgImage(page.html, page.base),
+    caption: caption ? caption[1] : '',
+    views: null,
+    likes: likes ? compactCount(likes[1]) : null,
+  }
+  return fields.thumbUrl || fields.caption ? fields : null
+}
+
 Deno.serve(async (req) => {
   const pre = preflight(req)
   if (pre) return pre
@@ -171,9 +258,20 @@ Deno.serve(async (req) => {
   const platform = detectPlatform(postUrl)
   if (!platform) return json({ error: 'Only TikTok and Instagram links are supported.' }, 400)
 
-  // 3) Fetch the single post (1 credit).
-  const { data, error, status } = await fetchPost(platform, postUrl)
-  if (error || !data) return json({ error: error ?? 'Could not read that post.' }, status)
+  // 3) Fetch the single post (1 credit). If ScrapeCreators can't answer — out of credits
+  //    above all — read the public page instead, so adding content never dead-ends.
+  const sc = await fetchPost(platform, postUrl)
+  let data = sc.data
+  let notice: string | undefined
+  if (sc.error || !data) {
+    data = (platform === 'tiktok' ? await fetchTikTokPublic(postUrl) : await fetchInstagramPublic(postUrl)) ?? undefined
+    if (!data) return json({ error: sc.error ?? 'Could not read that post.' }, sc.status)
+    const why = sc.error?.includes('credits') ? 'Out of ScrapeCreators credits' : 'ScrapeCreators unavailable'
+    const missing = [data.views == null && 'views', data.likes == null && 'likes', !data.caption && 'caption'].filter(Boolean)
+    notice =
+      `${why} — filled from the public ${platform === 'tiktok' ? 'TikTok' : 'Instagram'} page.` +
+      (missing.length ? ` Type in the ${missing.join(' & ')}.` : '')
+  }
 
   // 4) Re-host the cover (service role; the admin check above is the gate).
   const service = createClient(supaUrl, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!, {
@@ -188,6 +286,7 @@ Deno.serve(async (req) => {
       caption: data.caption,
       views: data.views,
       likes: data.likes,
+      ...(notice ? { notice } : {}),
     },
     200,
   )
